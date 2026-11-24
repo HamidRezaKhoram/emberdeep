@@ -11,7 +11,7 @@ Each milestone ends with something playable. Tick items as they land.
 - [x] AI GM: structured JSON turns, validated actions, offline / local LLM / Claude providers
 - [x] Hot-seat (1-4 heroes) and LAN host/join with broadcast discovery
 - [x] Headless tests: dice, rules, generator determinism and layout, ownership, GM validation, combat ends, snapshots
-- [ ] First run on a real machine: `scripts/fetch-godot.sh && scripts/run-tests.sh`, then play a delve
+- [x] First run on a real machine (Fedora, Intel UHD 630): tests pass, debug build runs, smoke bot plays a delve
 
 ## M1: A real session (vertical slice)
 

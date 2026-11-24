@@ -43,6 +43,8 @@ func _ready() -> void:
 	Net.lan_game_found.connect(_on_lan_found)
 	Net.joined.connect(_show_game)
 	Net.start_discovery()
+	if "--smoke" in OS.get_cmdline_user_args():
+		_run_smoke.call_deferred()
 
 
 # --- menu ------------------------------------------------------------------------
@@ -259,6 +261,12 @@ func _acting_id() -> String:
 	var cur := GameState.current_actor()
 	if GameState.players.has(cur) and int(GameState.players[cur]["owner"]) == Net.local_peer_id():
 		return cur
+	# a downed hero can't act: hand control to one of ours who is still standing
+	if GameState.players.has(controlled_id) and int(GameState.players[controlled_id]["hp"]) <= 0:
+		for id in GameState.player_order:
+			if int(GameState.players[id]["owner"]) == Net.local_peer_id() and int(GameState.players[id]["hp"]) > 0:
+				controlled_id = id
+				break
 	return controlled_id
 
 
@@ -303,3 +311,92 @@ func _on_log(entry: Dictionary) -> void:
 		"roll": log_label.append_text("[color=#9be07a]%s[/color]\n" % text)
 		"combat": log_label.append_text("[color=#ff9f8a]%s[/color]\n" % text)
 		_: log_label.append_text("[color=#a9a3b3]%s[/color]\n" % text)
+
+
+# --- dev smoke run -----------------------------------------------------------------
+
+## `emberdeep.x86_64 -- --smoke [--shot=/path/to.png] [--steps=N]`
+## Starts a seeded 2-hero hot-seat game and plays it by sending real key events
+## through the input pipeline (walks to the nearest unexplored door, fights what it
+## meets), then saves a screenshot, prints a summary and quits. A seed for playtest bots.
+func _run_smoke() -> void:
+	var shot := "user://smoke.png"
+	var steps := 400
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--shot="):
+			shot = a.trim_prefix("--shot=")
+		elif a.begins_with("--steps="):
+			steps = a.trim_prefix("--steps=").to_int()
+	seed_edit.text = "4242"
+	heroes_spin.value = 2
+	provider_option.select(0)
+	_start_local()
+	var keys := {Vector2i.UP: KEY_W, Vector2i.DOWN: KEY_S, Vector2i.LEFT: KEY_A, Vector2i.RIGHT: KEY_D}
+	for i in steps:
+		if GameState.game_over:
+			break
+		var d := _smoke_next_step()
+		_smoke_press(keys[d] if d != Vector2i.ZERO else KEY_SPACE)
+		await get_tree().process_frame
+		await get_tree().process_frame
+	await get_tree().create_timer(0.5).timeout
+	get_viewport().get_texture().get_image().save_png(shot)
+	var hp: Array = []
+	for id in GameState.player_order:
+		hp.append("%s %d/%d" % [GameState.players[id]["name"], GameState.players[id]["hp"], GameState.players[id]["max_hp"]])
+	print("SMOKE rooms=%d unexplored_doors=%d monsters=%d mode=%s game_over=%s log=%d heroes=[%s] shot=%s" % [
+		GameState.dungeon.rooms.size(), GameState.dungeon.doors.size(), GameState.monsters.size(),
+		GameState.mode, GameState.game_over, GameState.log_seq, ", ".join(hp), ProjectSettings.globalize_path(shot)])
+	get_tree().quit()
+
+
+func _smoke_press(key: Key) -> void:
+	var down := InputEventKey.new()
+	down.keycode = key
+	down.pressed = true
+	Input.parse_input_event(down)
+	var up := InputEventKey.new()
+	up.keycode = key
+	up.pressed = false
+	Input.parse_input_event(up)
+
+
+## First step of a shortest path to a goal (a foe to hit in combat, else an unexplored
+## door), or ZERO for "end turn".
+func _smoke_next_step() -> Vector2i:
+	var id := _acting_id()
+	if not GameState.players.has(id):
+		return Vector2i.ZERO
+	var hero: Dictionary = GameState.players[id]
+	var start: Vector2i = hero["pos"]
+	var combat := GameState.mode == "combat"
+	if combat:
+		for d in DungeonGenerator.DIRS:
+			if hero["has_action"] and not GameState.monster_at(start + d).is_empty():
+				return d
+		if int(hero["moves_left"]) <= 0:
+			return Vector2i.ZERO
+	var first := {start: Vector2i.ZERO}
+	var queue: Array = [start]
+	while not queue.is_empty():
+		var p: Vector2i = queue.pop_front()
+		var goal := false
+		if combat:
+			for d in DungeonGenerator.DIRS:
+				if not GameState.monster_at(p + d).is_empty():
+					goal = true
+		else:
+			goal = GameState.dungeon.get_tile(p) == DungeonGenerator.Tile.DOOR_UNEXPLORED
+		if goal and p != start:
+			return first[p]
+		if GameState.dungeon.get_tile(p) == DungeonGenerator.Tile.DOOR_UNEXPLORED:
+			continue
+		for d in DungeonGenerator.DIRS:
+			var q: Vector2i = p + d
+			if first.has(q) or not GameState.dungeon.is_walkable(q):
+				continue
+			if not GameState.player_at(q).is_empty() or not GameState.monster_at(q).is_empty():
+				continue
+			first[q] = d if p == start else first[p]
+			queue.append(q)
+	return Vector2i.ZERO

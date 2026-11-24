@@ -9,6 +9,8 @@ host-authoritative multiplayer (hot-seat, LAN, later Steam). Read `docs/ARCHITEC
 - `scripts/run-tests.sh`: headless tests; run before and after every change, must pass
 - `scripts/export-linux.sh`: builds `build/linux/emberdeep.x86_64`
 - `.tools/godot --path game`: run the game
+- `scripts/smoke.sh`: a bot plays a seeded 2-hero game through real key events in a window,
+  saves `build/smoke.png` and prints a summary; use it to check UI/gameplay changes for real
 
 ## Rules of the codebase
 

@@ -14,6 +14,7 @@ friends over **LAN** (Steam lobbies planned). Built with **Godot 4.6** for a nat
 scripts/fetch-godot.sh            # downloads the pinned Godot 4.6.3 editor into .tools/
 scripts/run-tests.sh              # headless test suite
 .tools/godot --path game          # play from source
+scripts/smoke.sh                  # bot plays a seeded game in a window, saves build/smoke.png
 ```
 
 Build the executable:
@@ -22,6 +23,9 @@ Build the executable:
 scripts/fetch-godot.sh --templates   # once: export templates (~1 GB)
 scripts/export-linux.sh              # -> build/linux/emberdeep.x86_64 (single file)
 ```
+
+Dev (debug) build: `.tools/godot --headless --path game --export-debug Linux "$PWD/build/linux/emberdeep-dev.x86_64"`.
+Any build accepts `-- --smoke [--shot=out.png] [--steps=N]` for the bot run.
 
 Or open `game/` in the Godot 4.6 editor.
 
