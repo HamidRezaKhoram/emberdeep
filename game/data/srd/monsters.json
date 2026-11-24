@@ -1,0 +1,11 @@
+{
+  "_note": "PLACEHOLDER stat blocks for the skeleton, simplified to one attack each. Before release, check every number against the SRD 5.2.1 (CC-BY-4.0) and keep the attribution in docs/LEGAL.md. speed is in 5-ft squares.",
+  "monsters": [
+    {"key": "giant_rat", "name": "Giant Rat", "cr": 0.125, "ac": 13, "hp": "2d6", "speed": 6, "dex": 15, "attack_bonus": 4, "damage": "1d4+2"},
+    {"key": "goblin", "name": "Goblin Warrior", "cr": 0.25, "ac": 15, "hp": "3d6", "speed": 6, "dex": 15, "attack_bonus": 4, "damage": "1d6+2"},
+    {"key": "skeleton", "name": "Skeleton", "cr": 0.25, "ac": 14, "hp": "2d8+4", "speed": 6, "dex": 16, "attack_bonus": 5, "damage": "1d6+3"},
+    {"key": "zombie", "name": "Zombie", "cr": 0.25, "ac": 8, "hp": "2d8+6", "speed": 4, "dex": 6, "attack_bonus": 3, "damage": "1d8+1"},
+    {"key": "wolf", "name": "Wolf", "cr": 0.25, "ac": 12, "hp": "2d8+2", "speed": 8, "dex": 15, "attack_bonus": 4, "damage": "1d6+2"},
+    {"key": "orc", "name": "Orc", "cr": 0.5, "ac": 13, "hp": "2d8+6", "speed": 6, "dex": 12, "attack_bonus": 5, "damage": "1d12+3"}
+  ]
+}

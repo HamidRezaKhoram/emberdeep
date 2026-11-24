@@ -1,0 +1,12 @@
+# Godot
+game/.godot/
+*.translation
+
+# Local toolchain and builds
+.tools/
+build/
+
+# Local model files and secrets
+*.gguf
+.env
+settings.cfg
