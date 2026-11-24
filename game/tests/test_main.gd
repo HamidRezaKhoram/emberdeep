@@ -14,6 +14,7 @@ func _ready() -> void:
 	_test_movement_and_ownership()
 	_test_gm_validation()
 	_test_combat_terminates()
+	_test_kill_keeps_turn()
 	_test_snapshot_roundtrip()
 	print("\n%d passed, %d failed" % [passes, failures])
 	get_tree().quit(1 if failures > 0 else 0)
@@ -190,6 +191,41 @@ func _test_combat_terminates() -> void:
 			if not attacked and GameState.current_actor() == cur:
 				GameState.handle_intent(1, {"type": "end_turn", "actor": cur})
 		check(steps < 2000, "seed %d: combat ends (%d steps, %s)" % [s, steps, "party lost" if GameState.game_over else "party won"])
+
+
+## Regression: killing a monster that acts earlier in initiative used to hand the
+## turn to the next monster without it acting, stalling combat.
+func _test_kill_keeps_turn() -> void:
+	GameState.new_game(55, ["Gil"], 1)
+	var hid: String = GameState.player_order[0]
+	var hero: Dictionary = GameState.players[hid]
+	var ev := {"kind": "player_action", "text": "", "actor": hid, "chain": 0}
+	GameState.apply_gm_response({"narration": "", "actions": [{"type": "spawn_monster", "ability": "", "dc": 0, "monster": "zombie", "count": 2, "item": "", "reason": ""}]}, ev)
+	var mids: Array = GameState.monsters.keys()
+	check(mids.size() == 2, "two zombies spawned")
+	if mids.size() != 2:
+		return
+	var victim: Dictionary = GameState.monsters[mids[0]]
+	# put the victim next to the hero, before the hero in initiative, and make it easy to kill
+	var spot := Vector2i.ZERO
+	for d in DungeonGenerator.DIRS:
+		var q: Vector2i = hero["pos"] + d
+		if GameState.dungeon.is_open_floor(q) and GameState.monster_at(q).is_empty():
+			spot = d
+			break
+	check(spot != Vector2i.ZERO, "free tile next to hero")
+	victim["pos"] = hero["pos"] + spot
+	victim["hp"] = 1
+	victim["ac"] = -50
+	GameState.initiative = [mids[0], hid, mids[1]]
+	GameState.turn_index = 1
+	for _try in 20:
+		if not GameState.monsters.has(mids[0]):
+			break
+		hero["has_action"] = true
+		GameState.handle_intent(1, {"type": "move", "dir": spot, "actor": hid})
+	check(not GameState.monsters.has(mids[0]), "victim died")
+	check(GameState.current_actor() == hid, "still the hero's turn after the kill (got %s)" % GameState.current_actor())
 
 
 func _test_snapshot_roundtrip() -> void:

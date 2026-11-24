@@ -104,9 +104,7 @@ func remove_players_of(owner_peer: int) -> void:
 			add_log("system", "%s leaves the party." % players[id]["name"])
 			players.erase(id)
 			player_order.erase(id)
-			initiative.erase(id)
-	if mode == "combat" and not initiative.is_empty():
-		turn_index = turn_index % initiative.size()
+			_remove_from_initiative(id)
 	changed.emit()
 
 
@@ -304,11 +302,7 @@ func _hero_attacks(hero: Dictionary, m: Dictionary) -> void:
 	if int(m["hp"]) <= 0:
 		add_log("combat", "The %s falls." % m["name"])
 		monsters.erase(m["id"])
-		initiative.erase(m["id"])
-		if not initiative.is_empty():
-			turn_index = turn_index % initiative.size()
-		if mode == "explore" and _any_monster_awake():
-			_start_combat()
+		_remove_from_initiative(m["id"])
 		_check_combat_over()
 
 
@@ -362,6 +356,23 @@ func _advance_turn() -> void:
 			return
 		if monsters.has(id):
 			_monster_turn(monsters[id])
+
+
+## Removing an actor must not shift whose turn it is: entries before the current
+## one move the pointer back by one; removing the current actor passes the turn on.
+func _remove_from_initiative(id: String) -> void:
+	var idx := initiative.find(id)
+	if idx < 0:
+		return
+	var was_current := mode == "combat" and idx == turn_index
+	initiative.remove_at(idx)
+	if idx < turn_index:
+		turn_index -= 1
+	if initiative.is_empty():
+		turn_index = 0
+	elif was_current:
+		turn_index -= 1
+		_advance_turn()
 
 
 func _maybe_auto_end(hero: Dictionary) -> void:
