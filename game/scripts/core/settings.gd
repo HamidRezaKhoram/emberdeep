@@ -12,6 +12,12 @@ const DEFAULTS := {
 		"move_repeat_delay": 0.22,      # seconds before a held move repeats
 		"move_repeat_interval": 0.11,   # seconds between repeats while held
 	},
+	"audio": {                          # volumes, 0.0 to 1.0
+		"master": 1.0,
+		"music": 0.8,
+		"sfx": 1.0,
+		"ambience": 0.7,
+	},
 	"ui": {
 		"scale": 1.0,                   # text and HUD size, 0.75 to 2.0 (e.g. 1.25 on a Steam Deck)
 	},

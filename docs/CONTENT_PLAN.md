@@ -205,10 +205,16 @@ game/audio/
 | `death_save_success` / `death_save_fail` | death saves (after Phase A) |
 | `check_success` / `check_fail` | an ability check the GM asked for |
 | `pickup` | an item is picked up |
+| `hero_die` | a hero dies after 3 failed death saves |
+| `woke` / `lost_track` | a monster notices you / gives up |
+| `stabilized` / `revived` | a dying hero is stable / back on their feet |
 | `gm_speak` | GM narration arrives (a soft page-turn or quill sound) |
 | `ui_click` / `ui_confirm` | menus |
 
-Rules the code will follow:
+The full, current list is in [EVENTS.md](EVENTS.md); `AudioDirector.sound_for()` is the mapping.
+**This hook is built:** drop files in and they play.
+
+Rules the code follows:
 
 - A missing file means silence, so you can add sounds one at a time.
 - Separate volume sliders for **Music**, **SFX** and **Ambience** (Godot audio buses).

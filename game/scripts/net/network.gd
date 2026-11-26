@@ -18,6 +18,7 @@ const PROTOCOL := "emberdeep/1"
 
 var _dirty := false
 var _last_map_sent := -1
+var _last_event_sent := 0
 var _beacon: PacketPeerUDP
 var _listener: PacketPeerUDP
 var _beacon_clock := 0.0
@@ -100,8 +101,9 @@ func start_discovery() -> void:
 func _process(delta: float) -> void:
 	if _dirty and is_online() and multiplayer.is_server():
 		var include_map := GameState.map_version != _last_map_sent
-		_rpc_snapshot.rpc(GameState.to_snapshot(include_map))
+		_rpc_snapshot.rpc(GameState.to_snapshot(include_map, _last_event_sent))
 		_last_map_sent = GameState.map_version
+		_last_event_sent = GameState.event_seq
 	_dirty = false
 	if _beacon:
 		_beacon_clock += delta

@@ -10,6 +10,10 @@ extends Node
 signal changed                          # any state change: redraw UI, broadcast to peers
 signal log_added(entry: Dictionary)     # {seq, kind, text}; kind: system | gm | player | roll | combat
 signal gm_event(event: Dictionary)      # host only: {kind, text, actor, chain}
+## One atomic thing that happened, in order: {seq, type, ...}. The rules resolve
+## instantly; the presentation (animation, sound) plays these back at its own pace.
+## Types and fields: docs/EVENTS.md. Clients get them inside snapshots.
+signal game_event(ev: Dictionary)
 
 const NO_TILE := Vector2i(-99999, -99999)
 # Every rules and balance number lives in game/data/ (GameData), not here.
@@ -29,6 +33,9 @@ var game_over: bool = false
 var map_version: int = 0
 var log_entries: Array = []
 var log_seq: int = 0
+var event_seq: int = 0               # like log_seq: keeps counting across games, so clients can tell new from old
+var recent_events: Array = []        # the last MAX_EVENTS events, for snapshots
+const MAX_EVENTS := 256
 var _next_id: int = 1
 var _gm_spawned: Dictionary = {}     # room id -> monsters the GM added there
 var _gm_actions: int = 0             # GM actions applied this game; seeds GM placement RNGs
@@ -57,6 +64,8 @@ func new_game(seed_value: int, hero_names: Array, owner_peer: int = 1) -> void:
 	items.clear()
 	initiative.clear()
 	log_entries.clear()
+	recent_events.clear()
+	_emit("reset", {})
 	_gm_spawned.clear()
 	_gm_actions = 0
 	_monster_at_tile.clear()
@@ -96,6 +105,7 @@ func add_player(hero_name: String, owner_peer: int) -> String:
 	hero["pos"] = _free_tile_near(dungeon.rooms[0]["center"] if dungeon and not dungeon.rooms.is_empty() else Vector2i.ZERO)
 	players[id] = hero
 	player_order.append(id)
+	_emit("spawned", {"actor": id, "pos": hero["pos"]})
 	if mode == "combat":
 		_join_initiative(id)
 	add_log("system", "%s joins the party." % hero["name"])
@@ -174,10 +184,12 @@ func is_dying(hero: Dictionary) -> bool:
 ## Moves a monster and keeps the tile index in step. Tests use it too.
 func move_monster(id: String, p: Vector2i) -> void:
 	var m: Dictionary = monsters[id]
-	if _monster_at_tile.get(m["pos"]) == id:
-		_monster_at_tile.erase(m["pos"])
+	var from: Vector2i = m["pos"]
+	if _monster_at_tile.get(from) == id:
+		_monster_at_tile.erase(from)
 	m["pos"] = p
 	_monster_at_tile[p] = id
+	_emit("moved", {"actor": id, "from": from, "to": p})
 
 
 # --- AI game master ------------------------------------------------------------
@@ -224,7 +236,9 @@ func summary_for_gm(actor_id: String) -> Dictionary:
 
 # --- network snapshots ----------------------------------------------------------
 
-func to_snapshot(include_map: bool) -> Dictionary:
+## include_map: send the dungeon too (only when map_version changed).
+## events_after: send the events with a higher seq (what clients haven't seen); -1 = none.
+func to_snapshot(include_map: bool, events_after: int = -1) -> Dictionary:
 	var s := {
 		"seed": world_seed, "players": players, "player_order": player_order, "monsters": monsters,
 		"items": items, "mode": mode, "initiative": initiative, "turn_index": turn_index,
@@ -233,6 +247,8 @@ func to_snapshot(include_map: bool) -> Dictionary:
 	}
 	if include_map:
 		s["map"] = dungeon.to_dict()
+	if events_after >= 0:
+		s["events"] = recent_events.filter(func(e): return int(e["seq"]) > events_after)
 	return s
 
 
@@ -252,6 +268,10 @@ func apply_snapshot(s: Dictionary) -> void:
 		dungeon.from_dict(s["map"])
 		map_version = int(s.get("map_version", 0))
 	_rebuild_indexes()
+	for ev in s.get("events", []):
+		if int(ev["seq"]) > event_seq:
+			event_seq = int(ev["seq"])
+			game_event.emit(ev)
 	for e in s.get("log", []):
 		if int(e["seq"]) > log_seq:
 			log_seq = int(e["seq"])
@@ -278,6 +298,16 @@ func hero_condition(h: Dictionary) -> String:
 	if h.get("stable", false):
 		return "unconscious, stable"
 	return "dying (%d successes, %d failures)" % [int(h.get("death_successes", 0)), int(h.get("death_failures", 0))]
+
+
+func _emit(type: String, data: Dictionary) -> void:
+	event_seq += 1
+	data["seq"] = event_seq
+	data["type"] = type
+	recent_events.append(data)
+	if recent_events.size() > MAX_EVENTS:
+		recent_events.pop_front()
+	game_event.emit(data)
 
 
 func add_log(kind: String, text: String) -> void:
@@ -322,13 +352,17 @@ func _intent_move(hero: Dictionary, d: Vector2i) -> void:
 		map_version += 1
 		if room.is_empty():
 			add_log("system", "Rubble blocks this doorway.")
+			_emit("door_blocked", {"actor": hero["id"], "pos": target})
 			return
 		_populate_room(room)
 		add_log("system", "%s opens a door: %s." % [hero["name"], room["kind"]])
+		_emit("door_open", {"actor": hero["id"], "pos": target, "room": room["id"], "kind": room["kind"]})
 		gm_event.emit({"kind": "room_revealed", "text": _describe_room(room), "actor": hero["id"], "chain": 0})
 	if not dungeon.is_walkable(target) or not player_at(target).is_empty():
 		return
+	var from: Vector2i = hero["pos"]
 	hero["pos"] = target
+	_emit("moved", {"actor": hero["id"], "from": from, "to": target})
 	_pick_up_items(hero)
 	if mode == "combat":
 		hero["moves_left"] = int(hero["moves_left"]) - 1
@@ -339,26 +373,33 @@ func _intent_move(hero: Dictionary, d: Vector2i) -> void:
 
 func _hero_attacks(hero: Dictionary, m: Dictionary) -> void:
 	var r := Rules.attack_roll(dice, int(hero["attack_bonus"]), int(m["ac"]))
+	var dmg := 0
 	if r["hit"]:
-		var dmg := Rules.damage(dice, str(hero["damage"]), r["crit"])
+		dmg = Rules.damage(dice, str(hero["damage"]), r["crit"])
 		m["hp"] = int(m["hp"]) - dmg
 		add_log("combat", "%s %s the %s with a %s: %d damage (rolled %d, total %d vs AC %d)." % [
 			hero["name"], "CRITS" if r["crit"] else "hits", m["name"], hero["weapon"], dmg, r["natural"], r["total"], m["ac"]])
 	else:
 		add_log("combat", "%s misses the %s (rolled %d, total %d vs AC %d)." % [hero["name"], m["name"], r["natural"], r["total"], m["ac"]])
+	_emit("attack", {"attacker": hero["id"], "target": m["id"], "hit": r["hit"], "crit": r["crit"], "damage": dmg, "natural": r["natural"]})
 	if int(m["hp"]) <= 0:
 		add_log("combat", "The %s falls." % m["name"])
+		_emit("monster_die", {"actor": m["id"], "key": m["key"], "name": m["name"], "pos": m["pos"]})
 		_remove_monster(str(m["id"]))
 		_check_combat_over()
 
 
 func _monster_attacks(m: Dictionary, hero: Dictionary) -> void:
 	var r := Rules.attack_roll(dice, int(m["attack_bonus"]), int(hero["ac"]))
+	var dmg := 0
 	if r["hit"]:
-		var dmg := Rules.damage(dice, str(m["damage"]), r["crit"])
+		dmg = Rules.damage(dice, str(m["damage"]), r["crit"])
+	_emit("attack", {"attacker": m["id"], "attacker_key": m["key"], "target": hero["id"], "hit": r["hit"], "crit": r["crit"], "damage": dmg, "natural": r["natural"]})
+	if r["hit"]:
 		hero["hp"] = maxi(0, int(hero["hp"]) - dmg)
 		add_log("combat", "The %s hits %s for %d damage (rolled %d)." % [m["name"], hero["name"], dmg, r["natural"]])
 		if int(hero["hp"]) == 0:
+			_emit("hero_down", {"actor": hero["id"]})
 			hero["death_successes"] = 0
 			hero["death_failures"] = 0
 			hero["stable"] = false
@@ -372,6 +413,7 @@ func _monster_attacks(m: Dictionary, hero: Dictionary) -> void:
 func _start_combat() -> void:
 	mode = "combat"
 	round_num = 1
+	_emit("combat_start", {})
 	_init_order.clear()
 	var ids: Array = []
 	for id in player_order:
@@ -452,6 +494,7 @@ func _advance_turn() -> void:
 					continue   # still down: the turn passes on
 			hero["moves_left"] = GameData.balance.speed_tiles
 			hero["has_action"] = true
+			_emit("turn_start", {"actor": id, "round": round_num})
 			add_log("system", "Round %d: %s's turn (move %d, attack by walking into a foe, Space to end)." % [round_num, hero["name"], hero["moves_left"]])
 			return
 		if monsters.has(id):
@@ -498,6 +541,7 @@ func _monster_turn(m: Dictionary) -> void:
 		m["lost_turns"] = int(m.get("lost_turns", 0)) + 1
 		if int(m["lost_turns"]) >= GameData.balance.lose_track_turns:
 			add_log("combat", "The %s loses track of you." % m["name"])
+			_emit("lost_track", {"actor": m["id"]})
 			_sleep(str(m["id"]))
 		return
 	m["lost_turns"] = 0
@@ -517,6 +561,7 @@ func _monster_turn(m: Dictionary) -> void:
 	if living_players().is_empty():
 		game_over = true
 		add_log("system", "The party has fallen. Press R to start a new delve.")
+		_emit("party_fallen", {})
 
 
 ## {target: hero id, path: Array[Vector2i]} for the nearest hero this creature can
@@ -551,6 +596,7 @@ func _check_combat_over() -> bool:
 		initiative.clear()
 		_init_order.clear()
 		add_log("combat", "The fight is over.")
+		_emit("combat_end", {})
 		_recover_stable_heroes()
 		gm_event.emit({"kind": "combat_over", "text": "The party won the fight.", "actor": living_players()[0] if not living_players().is_empty() else "", "chain": 0})
 		return true
@@ -599,6 +645,7 @@ func _wake(id: String, why: String) -> void:
 	m["lost_turns"] = 0
 	_awake_ids[id] = true
 	add_log("combat", "The %s %s!" % [m["name"], why])
+	_emit("woke", {"actor": id})
 	if mode == "combat":
 		_join_initiative(id)
 
@@ -615,6 +662,7 @@ func _sleep(id: String) -> void:
 ## back with 1 HP. Three successes: stable. Three failures: dead.
 func _death_save(hero: Dictionary) -> void:
 	var n := int(dice.d20()["natural"])
+	_emit("death_save", {"actor": hero["id"], "natural": n, "success": n >= 10})
 	if n == 20:
 		_revive(hero, 1)
 		add_log("roll", "%s rolls a death saving throw: natural 20! They regain consciousness with 1 HP." % hero["name"])
@@ -630,9 +678,11 @@ func _death_save(hero: Dictionary) -> void:
 	if int(hero["death_failures"]) >= 3:
 		hero["dead"] = true
 		add_log("combat", "%s dies." % hero["name"])
+		_emit("hero_die", {"actor": hero["id"]})
 	elif int(hero["death_successes"]) >= 3:
 		hero["stable"] = true
 		add_log("combat", "%s is stable, but unconscious." % hero["name"])
+		_emit("stabilized", {"actor": hero["id"]})
 
 
 func _dying_ally_at(p: Vector2i) -> String:
@@ -653,11 +703,13 @@ func _try_stabilize(hero: Dictionary, ally: Dictionary) -> void:
 	var mod := Rules.ability_modifier(int(hero["abilities"]["wis"]))
 	var dc := GameData.balance.stabilize_dc
 	var r := Rules.ability_check(dice, mod, dc)
+	_emit("check_success" if r["success"] else "check_fail", {"actor": hero["id"], "ability": "wis", "target": ally["id"]})
 	add_log("roll", "%s tends to %s: Wisdom (Medicine) check, rolled %d%+d = %d vs DC %d, %s." % [
 		hero["name"], ally["name"], r["natural"], mod, r["total"], dc, "SUCCESS" if r["success"] else "FAILURE"])
 	if r["success"]:
 		ally["stable"] = true
 		add_log("combat", "%s is stable." % ally["name"])
+		_emit("stabilized", {"actor": ally["id"]})
 		if mode == "explore":
 			_recover_stable_heroes()
 	if mode == "combat":
@@ -676,6 +728,7 @@ func _recover_stable_heroes() -> void:
 
 func _revive(hero: Dictionary, hp: int) -> void:
 	hero["hp"] = clampi(hp, 1, int(hero["max_hp"]))
+	_emit("revived", {"actor": hero["id"]})
 	hero["death_successes"] = 0
 	hero["death_failures"] = 0
 	hero["stable"] = false
@@ -717,6 +770,7 @@ func _spawn_monster(key: String, room: Dictionary, rng: RandomNumberGenerator, a
 		"speed": spec.speed, "dex": spec.dex, "awake": false, "room": room["id"], "lost_turns": 0,
 	}
 	_monster_at_tile[p] = id
+	_emit("spawned", {"actor": id, "key": key, "pos": p})
 	if awake:
 		monsters[id]["awake"] = true
 		_awake_ids[id] = true
@@ -747,6 +801,7 @@ func _pick_up_items(hero: Dictionary) -> void:
 			hero["inventory"].append(it["name"])
 			items.erase(it)
 			add_log("system", "%s picks up %s." % [hero["name"], it["name"]])
+			_emit("pickup", {"actor": hero["id"], "item": it["name"], "pos": it["pos"]})
 
 
 func _apply_gm_action(a: Dictionary, event: Dictionary) -> void:
@@ -773,6 +828,7 @@ func _apply_gm_action(a: Dictionary, event: Dictionary) -> void:
 				hero["name"], Rules.ABILITY_NAMES[ab], dc, str(a.get("reason", "")).left(80),
 				r["natural"], mod, r["total"], "SUCCESS" if r["success"] else "FAILURE"]
 			add_log("roll", text)
+			_emit("check_success" if r["success"] else "check_fail", {"actor": actor_id, "ability": ab})
 			if chain < GameData.balance.gm_max_chain:
 				gm_event.emit({"kind": "check_result", "text": text, "actor": actor_id, "chain": chain + 1})
 		"spawn_monster":

@@ -22,6 +22,9 @@
 
 1. **One source of truth.** `GameState` (autoload) on the host. Clients never change it;
    they send intents and render snapshots.
+2b. **Rules resolve, the view replays.** `GameState` resolves every action instantly and emits
+   ordered events; the `Presenter` decides when the player *sees* them. Rules never wait on
+   animation, and animation can't change the rules ([EVENTS.md](EVENTS.md)).
 2. **Everything is an intent.** Local keyboard, hot-seat, LAN peers all go through
    `Net.send_intent()` → `GameState.handle_intent(sender, intent)`. The sender's peer id must
    own the hero. This is why single-player and multiplayer share one code path.
@@ -43,7 +46,9 @@
 | `game/scripts/core/settings.gd` | `Settings`: `user://settings.cfg`, API key from env. |
 | `game/scripts/world/dungeon_generator.gd` | `DungeonGenerator`: door-driven room accretion, fog of war, line of sight, O(1) `room_at()` through a tile → room index. |
 | `game/scripts/world/pathfinder.gd` | `Pathfinder`: A* on the tile grid with a cap on tiles expanded, so cost doesn't grow with the map. Deterministic tie-breaking. |
-| `game/scripts/world/map_view.gd` | Draws revealed tiles and tokens; camera follows the acting hero. |
+| `game/scripts/world/map_view.gd` | Two layers: tiles (redrawn only when the map changes) and tokens (animated, culled to the camera). Frame-rate-independent camera. |
+| `game/scripts/view/presenter.gd` | `Presenter`: plays `GameState.game_event`s back over time (slides, lunges, flashes, floating numbers), catches up when behind, snaps to the truth when idle. See [EVENTS.md](EVENTS.md). |
+| `game/scripts/view/audio_director.gd` | `AudioDirector`: sound effects on played events, music crossfade (explore/combat), ambience by room kind; files by name, missing = silent. |
 | `game/scripts/net/network.gd` | Autoload `Net`: ENet host/join, intents, snapshots, LAN beacon. |
 | `game/scripts/gm/game_master.gd` | `GameMaster`: event queue, prompt + history, schema, provider fallback. |
 | `game/scripts/gm/*_provider.gd` | `GMProvider` base + Anthropic, local OpenAI-compatible, offline. |

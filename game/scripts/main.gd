@@ -11,6 +11,7 @@ var map_view: Node2D
 var in_game := false
 var controlled_id := ""
 var repeater: MoveRepeater
+var audio: AudioDirector
 var ui_scale := 1.0
 
 # menu widgets
@@ -41,6 +42,11 @@ func _ready() -> void:
 	map_view = MapViewScript.new()
 	map_view.visible = false
 	add_child(map_view)
+	audio = AudioDirector.new()
+	add_child(audio)
+	audio.apply_volumes(cfg)
+	map_view.presenter.played.connect(audio.on_played)
+	GameState.log_added.connect(audio.on_log)
 	var ui := CanvasLayer.new()
 	add_child(ui)
 	_build_menu(ui)
@@ -327,7 +333,8 @@ func _on_state_changed() -> void:
 	if not in_game:
 		return
 	map_view.focus_id = _acting_id()
-	map_view.queue_redraw()
+	audio.focus_id = map_view.focus_id
+	map_view.refresh()
 	var lines: Array = []
 	for id in GameState.player_order:
 		var h: Dictionary = GameState.players[id]

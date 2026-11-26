@@ -33,7 +33,9 @@ Each milestone ends with something playable. Tick items as they land.
 ## M2: Looks and feels like a game
 
 - [ ] Pixel-art tileset in TileMapLayer, autotiled walls, light radius, remembered tiles
-- [ ] Token sprites, hit/miss/damage popups, dice roll animation
+- [x] Event stream + Presenter: sliding tokens, attack lunges, hit flashes, damage/miss popups, crit shake, catch-up playback ([EVENTS.md](EVENTS.md))
+- [x] Audio hook: SFX per event, explore/combat music crossfade, ambience per room kind, volume settings
+- [ ] Token sprites, dice roll animation
 - [ ] Streaming narration (typewriter as tokens arrive)
 - [ ] Sound: ambience per room kind, combat SFX
 - [x] Controller support, rebindable actions, game-clock move repeat, UI scale ([INPUT.md](INPUT.md))

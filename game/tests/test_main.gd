@@ -29,6 +29,9 @@ func _ready() -> void:
 	_test_death_saves()
 	_test_stabilize()
 	_test_replay_determinism()
+	_test_event_stream_complete()
+	_test_presenter_playback()
+	_test_sound_mapping()
 	print("\n%d passed, %d failed" % [passes, failures])
 	get_tree().quit(1 if failures > 0 else 0)
 
@@ -692,3 +695,98 @@ func _test_move_repeater() -> void:
 	r.release(Vector2i.UP)
 	check(r.held() == Vector2i.LEFT, "releasing an old direction keeps the new one")
 	check(r.tick(1.0, false) == Vector2i.ZERO and r.held() == Vector2i.ZERO, "letting go stops the repeat")
+
+
+# --- events and presentation ---------------------------------------------------------
+
+## Rebuilding every token's position from the event stream alone must land exactly
+## where the rules put it: the presentation can't drift from the game.
+func _test_event_stream_complete() -> void:
+	for s in [3, 4242]:
+		var pos := {}
+		var dead := {}
+		var seqs: Array = []
+		var on_event := func(ev: Dictionary) -> void:
+			seqs.append(ev["seq"])
+			match ev["type"]:
+				"reset":
+					pos.clear()
+					dead.clear()
+				"spawned":
+					pos[ev["actor"]] = ev["pos"]
+				"moved":
+					pos[ev["actor"]] = ev["to"]
+				"monster_die":
+					dead[ev["actor"]] = true
+					pos.erase(ev["actor"])
+		GameState.game_event.connect(on_event)
+		var result := _bot_game(s, 300)
+		GameState.game_event.disconnect(on_event)
+		var wrong := 0
+		for id in GameState.players:
+			if pos.get(id) != GameState.players[id]["pos"]:
+				wrong += 1
+		for id in GameState.monsters:
+			if pos.get(id) != GameState.monsters[id]["pos"]:
+				wrong += 1
+		var extra := pos.size() - GameState.players.size() - GameState.monsters.size()
+		check(wrong == 0 and extra == 0, "seed %d: events alone reproduce every position (%d wrong, %d extra)" % [s, wrong, extra])
+		var ordered := true
+		for i in range(1, seqs.size()):
+			if int(seqs[i]) != int(seqs[i - 1]) + 1:
+				ordered = false
+		check(ordered and seqs.size() > 50, "seed %d: event seq numbers are gapless (%d events)" % [s, seqs.size()])
+		check(result["error"].is_empty(), "seed %d: still no invariant errors" % s)
+
+
+func _test_presenter_playback() -> void:
+	var pr := Presenter.new()
+	var truth := {"h1": Vector2i(3, 0), "m1": Vector2i(5, 0)}
+	var tf := func() -> Dictionary: return truth
+	pr.push({"seq": 1, "type": "spawned", "actor": "h1", "pos": Vector2i(0, 0)})
+	pr.push({"seq": 2, "type": "spawned", "actor": "m1", "pos": Vector2i(5, 0)})
+	for i in 3:
+		pr.push({"seq": 3 + i, "type": "moved", "actor": "h1", "from": Vector2i(i, 0), "to": Vector2i(i + 1, 0)})
+	var played: Array = []
+	pr.played.connect(func(ev): played.append(ev["seq"]))
+	pr.advance(0.0, tf)
+	check(pr.visual["h1"] == Vector2(0, 0), "a move doesn't show before time passes")
+	pr.advance(0.045, tf)
+	var mid: Vector2 = pr.visual["h1"]
+	check(mid.x > 0.0 and mid.x < 1.0, "mid-move the token is between tiles (%s)" % str(mid))
+	for i in 20:
+		pr.advance(0.05, tf)
+	check(pr.visual["h1"] == Vector2(3, 0) and not pr.busy(), "playback ends where the rules are")
+	check(played == [1, 2, 3, 4, 5], "events play in order (%s)" % str(played))
+	# a long queue catches up: 30 moves (2.7 s at normal speed) finish well under that
+	for i in 30:
+		pr.push({"seq": 10 + i, "type": "moved", "actor": "m1", "from": Vector2i(5, i), "to": Vector2i(5, i + 1)})
+	truth["m1"] = Vector2i(5, 30)
+	var t := 0.0
+	while pr.busy() and t < 5.0:
+		pr.advance(1.0 / 60.0, tf)
+		t += 1.0 / 60.0
+	check(t < 1.5, "a backlog of 30 moves catches up in %.2f s (< 1.5 s)" % t)
+	# kills keep the dead monster on screen until its death plays
+	pr.push({"seq": 50, "type": "attack", "attacker": "h1", "target": "m1", "hit": true, "crit": true, "damage": 9, "natural": 20})
+	pr.push({"seq": 51, "type": "monster_die", "actor": "m1", "key": "orc", "name": "Orc", "pos": Vector2i(5, 30)})
+	truth.erase("m1")
+	check(pr.ghosts.has("m1"), "a dying monster is kept as a ghost")
+	for i in 30:
+		pr.advance(0.05, tf)
+	check(not pr.ghosts.has("m1") and not pr.visual.has("m1"), "the ghost is gone after its death plays")
+	check(pr.floaters.is_empty() or pr.floaters[0]["text"] == "CRIT 9", "a crit shows its damage")
+	pr.push({"seq": 60, "type": "reset"})
+	check(pr.visual.is_empty() and not pr.busy(), "reset clears the view")
+
+
+func _test_sound_mapping() -> void:
+	var hit := {"type": "attack", "hit": true, "crit": false, "damage": 5}
+	check(AudioDirector.sound_for(hit, true) == ["attack_hit"], "hero hit")
+	var crit := {"type": "attack", "hit": true, "crit": true, "damage": 9}
+	check(AudioDirector.sound_for(crit, true) == ["attack_crit", "attack_hit"], "crit falls back to hit")
+	var mhit := {"type": "attack", "hit": true, "crit": false, "attacker_key": "goblin"}
+	check(AudioDirector.sound_for(mhit, false) == ["monster_hit_goblin", "monster_hit"], "monster-specific sound first")
+	check(AudioDirector.sound_for({"type": "moved"}, false).is_empty(), "monsters' steps are silent")
+	check(AudioDirector.sound_for({"type": "moved"}, true) == ["step"], "heroes' steps")
+	check(AudioDirector.sound_for({"type": "death_save", "success": false}, true) == ["death_save_fail"], "death save sounds")
