@@ -8,6 +8,8 @@ var failures := 0
 
 func _ready() -> void:
 	_test_game_data()
+	_test_input_bindings()
+	_test_move_repeater()
 	_test_dice()
 	_test_rules()
 	_test_generator_determinism()
@@ -637,3 +639,56 @@ func _test_game_data() -> void:
 	var m := GameData.MonsterSpec.new(GameData._Reader.new({"key": "x", "hp": "lots", "damage": "2d7"}, "m.json", bad2))
 	check(m.hp == "1d6" and m.damage == "1d4", "bad dice fall back")
 	check(bad2.size() >= 2 and "hp: 'lots' is not a dice expression" in "\n".join(bad2), "reports bad dice")
+
+
+# --- input ---------------------------------------------------------------------------
+
+func _test_input_bindings() -> void:
+	var errs := InputBindings.apply(null)
+	check(errs.is_empty(), "default bindings load without errors %s" % str(errs))
+	for action in ["move_up", "move_down", "move_left", "move_right", "end_turn", "switch_hero", "talk", "cancel", "restart"]:
+		check(InputMap.has_action(action) and InputMap.action_get_events(action).size() >= 2, "%s has keyboard and controller bindings" % action)
+	var w := InputBindings.parse("key:W") as InputEventKey
+	check(w != null and w.physical_keycode == KEY_W and w.keycode == KEY_NONE, "letters bind by physical key")
+	var sp := InputBindings.parse("key:Space") as InputEventKey
+	check(sp != null and sp.keycode == KEY_SPACE, "named keys bind by keycode")
+	var pad := InputBindings.parse("joy_button:dpad_up") as InputEventJoypadButton
+	check(pad != null and pad.button_index == JOY_BUTTON_DPAD_UP, "controller buttons by name")
+	var ax := InputBindings.parse("joy_axis:left_y-") as InputEventJoypadMotion
+	check(ax != null and ax.axis == JOY_AXIS_LEFT_Y and ax.axis_value < 0, "stick directions")
+	for bad in ["key:NotAKey", "joy_button:z", "joy_axis:left_y", "nonsense", "joy_button:99"]:
+		check(InputBindings.parse(bad) == null, "rejects '%s'" % bad)
+	# a real key event reaches the action
+	var ev := InputEventKey.new()
+	ev.keycode = KEY_W
+	ev.physical_keycode = KEY_W
+	ev.pressed = true
+	check(ev.is_action_pressed("move_up"), "pressing W triggers move_up")
+	# the player's override replaces the defaults for that action only
+	var cfg := ConfigFile.new()
+	cfg.set_value("input", "end_turn", "key:Enter, joy_button:start")
+	cfg.set_value("input", "talk", "key:Bogus")
+	errs = InputBindings.apply(cfg)
+	check(errs.size() == 1 and "talk" in errs[0], "a bad override is reported (%s)" % str(errs))
+	var space := InputEventKey.new()
+	space.keycode = KEY_SPACE
+	space.pressed = true
+	var enter := InputEventKey.new()
+	enter.keycode = KEY_ENTER
+	enter.pressed = true
+	check(enter.is_action_pressed("end_turn") and not space.is_action_pressed("end_turn"), "override rebinds end_turn to Enter")
+	check(InputBindings.describe("end_turn") == "Enter / pad start", "describe() reads bindings for players (%s)" % InputBindings.describe("end_turn"))
+	InputBindings.apply(null)
+
+
+func _test_move_repeater() -> void:
+	var r := MoveRepeater.new(0.2, 0.1)
+	check(r.press(Vector2i.UP) == Vector2i.UP, "a press moves at once")
+	check(r.tick(0.15, true) == Vector2i.ZERO, "no repeat before the delay")
+	check(r.tick(0.06, true) == Vector2i.UP, "repeats after the delay")
+	check(r.tick(0.05, true) == Vector2i.ZERO and r.tick(0.06, true) == Vector2i.UP, "then every interval")
+	check(r.tick(5.0, true) == Vector2i.UP and r.tick(0.01, true) == Vector2i.ZERO, "a frame hitch fires one step, not a burst")
+	r.press(Vector2i.LEFT)
+	r.release(Vector2i.UP)
+	check(r.held() == Vector2i.LEFT, "releasing an old direction keeps the new one")
+	check(r.tick(1.0, false) == Vector2i.ZERO and r.held() == Vector2i.ZERO, "letting go stops the repeat")

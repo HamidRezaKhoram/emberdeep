@@ -36,7 +36,8 @@ Each milestone ends with something playable. Tick items as they land.
 - [ ] Token sprites, hit/miss/damage popups, dice roll animation
 - [ ] Streaming narration (typewriter as tokens arrive)
 - [ ] Sound: ambience per room kind, combat SFX
-- [ ] Controller support; mouse click-to-move with path preview
+- [x] Controller support, rebindable actions, game-clock move repeat, UI scale ([INPUT.md](INPUT.md))
+- [ ] Mouse click-to-move with path preview
 - [ ] Character sheet and inventory panels
 
 ## M3: Friends

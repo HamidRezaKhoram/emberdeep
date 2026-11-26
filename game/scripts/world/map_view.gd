@@ -14,11 +14,17 @@ const HERO_COLORS := [Color("5ab0e8"), Color("8be07a"), Color("e87adf"), Color("
 
 var focus_id := ""
 var camera: Camera2D
+## Width of the HUD covering the right of the screen; the camera centers on what's left.
+var hud_width := 420:
+	set(v):
+		hud_width = v
+		if camera:
+			camera.offset = Vector2(v / 2.0, 0)
 
 
 func _ready() -> void:
 	camera = Camera2D.new()
-	camera.offset = Vector2(210, 0)  # the HUD covers the right 420 px
+	camera.offset = Vector2(hud_width / 2.0, 0)
 	add_child(camera)
 	camera.make_current()
 

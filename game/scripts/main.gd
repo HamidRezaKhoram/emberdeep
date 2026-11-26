@@ -10,6 +10,8 @@ var gm: GameMaster
 var map_view: Node2D
 var in_game := false
 var controlled_id := ""
+var repeater: MoveRepeater
+var ui_scale := 1.0
 
 # menu widgets
 var menu: Control
@@ -26,10 +28,16 @@ var hud: Control
 var status_label: Label
 var log_label: RichTextLabel
 var input_line: LineEdit
+var help_label: Label
+
+const HUD_WIDTH := 420
 
 
 func _ready() -> void:
 	cfg = Settings.load_config()
+	InputBindings.apply(cfg)
+	repeater = MoveRepeater.new(float(cfg.get_value("controls", "move_repeat_delay")), float(cfg.get_value("controls", "move_repeat_interval")))
+	ui_scale = Settings.ui_scale(cfg)
 	map_view = MapViewScript.new()
 	map_view.visible = false
 	add_child(map_view)
@@ -37,6 +45,7 @@ func _ready() -> void:
 	add_child(ui)
 	_build_menu(ui)
 	_build_hud(ui)
+	_apply_ui_scale()
 	GameState.log_added.connect(_on_log)
 	GameState.changed.connect(_on_state_changed)
 	Net.status.connect(func(t): menu_status.text = t)
@@ -54,13 +63,13 @@ func _build_menu(ui: CanvasLayer) -> void:
 	menu.set_anchors_preset(Control.PRESET_FULL_RECT)
 	ui.add_child(menu)
 	var box := VBoxContainer.new()
-	box.custom_minimum_size = Vector2(460, 0)
+	box.custom_minimum_size = Vector2(460 * ui_scale, 0)
 	box.add_theme_constant_override("separation", 8)
 	menu.add_child(box)
 
 	var title := Label.new()
 	title.text = "EMBERDEEP"
-	title.add_theme_font_size_override("font_size", 40)
+	title.add_theme_font_size_override("font_size", roundi(40 * ui_scale))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(title)
 
@@ -188,7 +197,7 @@ func _build_hud(ui: CanvasLayer) -> void:
 	hud.anchor_left = 1.0
 	hud.anchor_right = 1.0
 	hud.anchor_bottom = 1.0
-	hud.offset_left = -420
+	hud.offset_left = -HUD_WIDTH
 	hud.visible = false
 	ui.add_child(hud)
 	var box := VBoxContainer.new()
@@ -205,10 +214,23 @@ func _build_hud(ui: CanvasLayer) -> void:
 	input_line.placeholder_text = "Enter: tell the GM what you do or say"
 	input_line.text_submitted.connect(_on_say)
 	box.add_child(input_line)
-	var help := Label.new()
-	help.text = "Move: arrows/WASD  Attack: walk into a foe\nSpace: end turn  Tab: switch hero  Esc: leave text box"
-	help.add_theme_font_size_override("font_size", 12)
-	box.add_child(help)
+	help_label = Label.new()
+	help_label.text = InputBindings.help_text()
+	help_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(help_label)
+
+
+## One theme for every menu and HUD control: text size and panel width follow the
+## player's ui scale. The map is not scaled (it has its own camera).
+func _apply_ui_scale() -> void:
+	var theme := Theme.new()
+	theme.default_font_size = roundi(16 * ui_scale)
+	menu.theme = theme
+	hud.theme = theme
+	help_label.add_theme_font_size_override("font_size", roundi(12 * ui_scale))
+	var width := roundi(HUD_WIDTH * ui_scale)
+	hud.offset_left = -width
+	map_view.hud_width = width
 
 
 func _show_game() -> void:
@@ -225,35 +247,51 @@ func _show_game() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	var k := event as InputEventKey
-	if not in_game or k == null or not k.pressed:
+	if not in_game:
 		return
-	var key: int = k.keycode
 	if input_line.has_focus():
-		if key == KEY_ESCAPE:
+		if event.is_action_pressed("cancel"):
 			input_line.release_focus()
+			get_viewport().set_input_as_handled()
 		return
-	var dir := Vector2i.ZERO
-	match key:
-		KEY_UP, KEY_W: dir = Vector2i.UP
-		KEY_DOWN, KEY_S: dir = Vector2i.DOWN
-		KEY_LEFT, KEY_A: dir = Vector2i.LEFT
-		KEY_RIGHT, KEY_D: dir = Vector2i.RIGHT
-	if dir != Vector2i.ZERO:
-		Net.send_intent({"type": "move", "dir": dir, "actor": _acting_id()})
-	elif k.echo:
-		return
-	elif key == KEY_SPACE:
+	for action in InputBindings.MOVES:
+		if event.is_action_released(action):
+			repeater.release(InputBindings.MOVES[action])
+		elif event.is_action_pressed(action):
+			# moves fire on the press itself (no waiting for the next frame); holding
+			# repeats on the game's clock in _process
+			_send_move(repeater.press(InputBindings.MOVES[action]))
+			get_viewport().set_input_as_handled()
+			return
+	if event.is_action_pressed("end_turn"):
 		Net.send_intent({"type": "end_turn", "actor": _acting_id()})
-	elif key == KEY_TAB:
+	elif event.is_action_pressed("switch_hero"):
 		_cycle_hero()
-	elif key == KEY_ENTER or key == KEY_KP_ENTER:
-		input_line.grab_focus()
-	elif key == KEY_R and GameState.game_over and not Net.is_online():
+	elif event.is_action_pressed("talk"):
+		input_line.grab_focus.call_deferred()   # deferred: the same key must not also submit the box
+	elif event.is_action_pressed("restart") and GameState.game_over and not Net.is_online():
 		_start_local()
 	else:
 		return
 	get_viewport().set_input_as_handled()
+
+
+func _process(delta: float) -> void:
+	if not in_game or input_line.has_focus():
+		return
+	var held := repeater.held()
+	if held == Vector2i.ZERO:
+		return
+	var action := ""
+	for a in InputBindings.MOVES:
+		if InputBindings.MOVES[a] == held:
+			action = a
+	_send_move(repeater.tick(delta, Input.is_action_pressed(action)))
+
+
+func _send_move(dir: Vector2i) -> void:
+	if dir != Vector2i.ZERO:
+		Net.send_intent({"type": "move", "dir": dir, "actor": _acting_id()})
 
 
 ## In combat, hot-seat players automatically control whoever's turn it is.
@@ -352,14 +390,12 @@ func _run_smoke() -> void:
 
 
 func _smoke_press(key: Key) -> void:
-	var down := InputEventKey.new()
-	down.keycode = key
-	down.pressed = true
-	Input.parse_input_event(down)
-	var up := InputEventKey.new()
-	up.keycode = key
-	up.pressed = false
-	Input.parse_input_event(up)
+	for pressed in [true, false]:
+		var ev := InputEventKey.new()   # like a real keyboard: logical and physical code
+		ev.keycode = key
+		ev.physical_keycode = key
+		ev.pressed = pressed
+		Input.parse_input_event(ev)
 
 
 ## First step of a shortest path to a goal (a foe to hit in combat, else an unexplored

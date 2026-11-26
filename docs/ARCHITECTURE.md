@@ -47,7 +47,8 @@
 | `game/scripts/net/network.gd` | Autoload `Net`: ENet host/join, intents, snapshots, LAN beacon. |
 | `game/scripts/gm/game_master.gd` | `GameMaster`: event queue, prompt + history, schema, provider fallback. |
 | `game/scripts/gm/*_provider.gd` | `GMProvider` base + Anthropic, local OpenAI-compatible, offline. |
-| `game/scripts/main.gd` | Menu and HUD, built in code; keyboard input → intents. |
+| `game/scripts/main.gd` | Menu and HUD, built in code; input actions → intents. |
+| `game/scripts/input/` | `InputBindings` (actions from `data/input/bindings.json` + player overrides), `MoveRepeater` (held-move repeat on the game clock). See [INPUT.md](INPUT.md). |
 | `game/data/rules/*.json` | Balance, dungeon generation, hero classes, items. |
 | `game/data/srd/monsters.json` | Stat blocks (placeholders until checked against SRD 5.2.1). |
 | `game/data/prompts/gm_system.md` | The GM system prompt. |

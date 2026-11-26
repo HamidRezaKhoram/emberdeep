@@ -43,8 +43,9 @@ Only the host needs a model or a key. Settings live in
 
 ## Controls
 
-Arrows / WASD move · walk into a monster to attack · Space ends your combat turn ·
-Tab switches hero (hot-seat) · Enter talks to the GM · Esc leaves the text box.
+Arrows / WASD or D-pad / stick move · walk into a monster to attack, or into a dying ally to help ·
+Space (A) ends your combat turn · Tab (X) switches hero (hot-seat) · Enter (Y) talks to the GM ·
+Esc (B) leaves the text box. All rebindable: [docs/INPUT.md](docs/INPUT.md).
 Gold squares are unexplored doors.
 
 ## How it fits together

@@ -1,0 +1,14 @@
+{
+  "_note": "Default controls. Players override any action in settings.cfg, section [input], e.g. end_turn=\"key:Enter, joy_button:a\". Formats: key:<Godot key name>, joy_button:<a|b|x|y|back|start|left_shoulder|right_shoulder|dpad_up|dpad_down|dpad_left|dpad_right|number>, joy_axis:<left_x|left_y|right_x|right_y><+|->. See docs/INPUT.md.",
+  "actions": {
+    "move_up":     {"label": "Move up",          "bind": ["key:W", "key:Up", "joy_button:dpad_up", "joy_axis:left_y-"]},
+    "move_down":   {"label": "Move down",        "bind": ["key:S", "key:Down", "joy_button:dpad_down", "joy_axis:left_y+"]},
+    "move_left":   {"label": "Move left",        "bind": ["key:A", "key:Left", "joy_button:dpad_left", "joy_axis:left_x-"]},
+    "move_right":  {"label": "Move right",       "bind": ["key:D", "key:Right", "joy_button:dpad_right", "joy_axis:left_x+"]},
+    "end_turn":    {"label": "End turn",         "bind": ["key:Space", "joy_button:a"]},
+    "switch_hero": {"label": "Switch hero",      "bind": ["key:Tab", "joy_button:x"]},
+    "talk":        {"label": "Talk to the GM",   "bind": ["key:Enter", "key:Kp Enter", "joy_button:y"]},
+    "cancel":      {"label": "Leave text box",   "bind": ["key:Escape", "joy_button:b"]},
+    "restart":     {"label": "New delve (after a loss)", "bind": ["key:R", "joy_button:start"]}
+  }
+}
