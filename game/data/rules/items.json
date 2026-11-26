@@ -1,0 +1,7 @@
+{
+  "_note": "Flavor items rooms can hold. Names only for now; items get rules in M1.",
+  "flavor_items": [
+    "a pouch of tarnished coins", "a potion of healing", "a rusted key",
+    "a torn map fragment", "a silver holy symbol", "a coil of hempen rope"
+  ]
+}

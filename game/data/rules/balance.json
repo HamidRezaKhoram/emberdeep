@@ -1,0 +1,24 @@
+{
+  "_note": "Tuning numbers for play. Edit and press F5 in a debug build to reload (see docs/DATA.md). Rules numbers marked SRD follow SRD 5.2.1.",
+  "speed_tiles": 6,
+  "sight_tiles": 8,
+  "lose_track_turns": 2,
+  "path_budget": 512,
+  "stabilize_dc": 10,
+  "max_log": 200,
+  "gm": {
+    "max_spawns_per_room": 3,
+    "max_actions_per_turn": 4,
+    "max_chain": 2,
+    "dc_min": 5,
+    "dc_max": 30,
+    "max_spawn_count": 3
+  },
+  "encounters": {
+    "monster_chance": 0.45,
+    "item_chance": 0.3,
+    "cr_budget_base": 0.25,
+    "cr_budget_per_depth": 0.125,
+    "max_group": 4
+  }
+}

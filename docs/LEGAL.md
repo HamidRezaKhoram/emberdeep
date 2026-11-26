@@ -27,7 +27,7 @@ Before release, compare this text with the legal page of the SRD 5.2.1 PDF and u
 
 ## Data files
 
-`game/data/srd/` holds rules data derived from the SRD. Each file says where it came from. The
+`game/data/srd/` and `game/data/rules/heroes.json` hold rules data derived from the SRD. Each file says where it came from. The
 current monster stats are **placeholders**; check every value against the SRD 5.2.1 before release.
 
 ## AI-generated text

@@ -11,25 +11,12 @@ signal changed                          # any state change: redraw UI, broadcast
 signal log_added(entry: Dictionary)     # {seq, kind, text}; kind: system | gm | player | roll | combat
 signal gm_event(event: Dictionary)      # host only: {kind, text, actor, chain}
 
-const SPEED_TILES := 6          # 30 ft at 5 ft per square
-const MAX_LOG := 200
-const MAX_GM_SPAWNS_PER_ROOM := 3
-const MAX_GM_ACTIONS_PER_TURN := 4
-const MAX_GM_CHAIN := 2         # how many follow-up GM calls one event may cause
-const SIGHT_TILES := 8          # how far a sleeping creature notices a hero (40 ft, needs line of sight)
-const LOSE_TRACK_TURNS := 2     # an awake creature with no route to the party for this many turns gives up
-const PATH_BUDGET := 512        # max tiles one creature's path search may expand (cost is map-size independent)
-const STABILIZE_DC := 10        # Wisdom (Medicine) check to stabilize a dying ally (SRD 5.2.1)
 const NO_TILE := Vector2i(-99999, -99999)
-const FLAVOR_ITEMS := [
-	"a pouch of tarnished coins", "a potion of healing", "a rusted key",
-	"a torn map fragment", "a silver holy symbol", "a coil of hempen rope",
-]
+# Every rules and balance number lives in game/data/ (GameData), not here.
 
 var world_seed: int = 0
 var dice: Dice
 var dungeon: DungeonGenerator
-var monster_table: Dictionary = {}   # key -> stat block (data/srd/monsters.json)
 var players: Dictionary = {}         # hero id -> hero
 var player_order: Array = []
 var monsters: Dictionary = {}        # monster id -> monster
@@ -54,7 +41,7 @@ var _init_order: Dictionary = {}       # actor id -> [initiative total, dex scor
 
 
 func _ready() -> void:
-	monster_table = _load_monsters()
+	GameData.ensure_loaded()
 
 
 # --- setup -----------------------------------------------------------------
@@ -63,8 +50,7 @@ func new_game(seed_value: int, hero_names: Array, owner_peer: int = 1) -> void:
 	world_seed = seed_value if seed_value != 0 else randi_range(1, 2000000000)
 	dice = Dice.new(world_seed)
 	dungeon = DungeonGenerator.new(world_seed)
-	if monster_table.is_empty():
-		monster_table = _load_monsters()
+	GameData.ensure_loaded()
 	players.clear()
 	player_order.clear()
 	monsters.clear()
@@ -94,12 +80,13 @@ func new_game(seed_value: int, hero_names: Array, owner_peer: int = 1) -> void:
 func add_player(hero_name: String, owner_peer: int) -> String:
 	var id := "h%d" % _next_id
 	_next_id += 1
+	var cls := GameData.hero_class(GameData.default_class)
 	var hero := {
 		"id": id, "name": hero_name.strip_edges().left(24), "owner": owner_peer,
-		"class": "Fighter", "level": 1,
-		"abilities": {"str": 15, "dex": 14, "con": 13, "int": 10, "wis": 12, "cha": 8},
-		"hp": 11, "max_hp": 11, "ac": 16, "attack_bonus": 4, "damage": "1d8+2", "weapon": "longsword",
-		"pos": Vector2i.ZERO, "moves_left": SPEED_TILES, "has_action": true,
+		"class": cls.name, "level": cls.level, "abilities": cls.abilities.duplicate(),
+		"hp": cls.hp, "max_hp": cls.hp, "ac": cls.ac, "attack_bonus": cls.attack_bonus,
+		"damage": cls.damage, "weapon": cls.weapon,
+		"pos": Vector2i.ZERO, "moves_left": GameData.balance.speed_tiles, "has_action": true,
 		"inventory": [], "color": player_order.size(),
 		# at 0 HP: dying until 3 successes (stable) or 3 failures (dead); see _death_save()
 		"death_successes": 0, "death_failures": 0, "stable": false, "dead": false,
@@ -205,7 +192,7 @@ func apply_gm_response(data: Dictionary, event: Dictionary) -> void:
 	if typeof(actions) == TYPE_ARRAY:
 		var applied := 0
 		for a in actions:
-			if applied >= MAX_GM_ACTIONS_PER_TURN:
+			if applied >= GameData.balance.gm_max_actions_per_turn:
 				break
 			if typeof(a) == TYPE_DICTIONARY:
 				_apply_gm_action(a, event)
@@ -231,7 +218,7 @@ func summary_for_gm(actor_id: String) -> Dictionary:
 		recent.append("[%s] %s" % [e["kind"], e["text"]])
 	return {
 		"mode": mode, "round": round_num, "acting_hero": actor_id, "party": party,
-		"location": room_info, "allowed_monsters": monster_table.keys(), "recent_log": recent,
+		"location": room_info, "allowed_monsters": GameData.monsters.keys(), "recent_log": recent,
 	}
 
 
@@ -297,7 +284,7 @@ func add_log(kind: String, text: String) -> void:
 	log_seq += 1
 	var entry := {"seq": log_seq, "kind": kind, "text": text}
 	log_entries.append(entry)
-	if log_entries.size() > MAX_LOG:
+	if log_entries.size() > GameData.balance.max_log:
 		log_entries.pop_front()
 	log_added.emit(entry)
 
@@ -463,9 +450,9 @@ func _advance_turn() -> void:
 				_death_save(hero)
 				if int(hero["hp"]) <= 0:
 					continue   # still down: the turn passes on
-			hero["moves_left"] = SPEED_TILES
+			hero["moves_left"] = GameData.balance.speed_tiles
 			hero["has_action"] = true
-			add_log("system", "Round %d: %s's turn (move %d, attack by walking into a foe, Space to end)." % [round_num, hero["name"], SPEED_TILES])
+			add_log("system", "Round %d: %s's turn (move %d, attack by walking into a foe, Space to end)." % [round_num, hero["name"], hero["moves_left"]])
 			return
 		if monsters.has(id):
 			_monster_turn(monsters[id])
@@ -509,7 +496,7 @@ func _monster_turn(m: Dictionary) -> void:
 	var chase := _find_chase(m)
 	if chase.is_empty():
 		m["lost_turns"] = int(m.get("lost_turns", 0)) + 1
-		if int(m["lost_turns"]) >= LOSE_TRACK_TURNS:
+		if int(m["lost_turns"]) >= GameData.balance.lose_track_turns:
 			add_log("combat", "The %s loses track of you." % m["name"])
 			_sleep(str(m["id"]))
 		return
@@ -546,7 +533,7 @@ func _find_chase(m: Dictionary) -> Dictionary:
 		var goal: Vector2i = players[hid]["pos"]
 		if _manhattan(from, goal) == 1:
 			return {"target": hid, "path": [goal]}
-		var path := Pathfinder.find_path(from, goal, _monster_can_enter, PATH_BUDGET)
+		var path := Pathfinder.find_path(from, goal, _monster_can_enter, GameData.balance.path_budget)
 		if not path.is_empty():
 			return {"target": hid, "path": path}
 	return {}
@@ -587,17 +574,18 @@ func _sorted_awake_ids() -> Array:
 ## cost does not grow with the number of creatures in the dungeon.
 ## Starts a fight if anything is awake while exploring.
 func _update_awareness() -> void:
+	var sight := GameData.balance.sight_tiles
 	for hid in living_players():
 		var hp: Vector2i = players[hid]["pos"]
 		var hroom := dungeon.room_at(hp)
-		for x in range(hp.x - SIGHT_TILES, hp.x + SIGHT_TILES + 1):
-			for y in range(hp.y - SIGHT_TILES, hp.y + SIGHT_TILES + 1):
+		for x in range(hp.x - sight, hp.x + sight + 1):
+			for y in range(hp.y - sight, hp.y + sight + 1):
 				var p := Vector2i(x, y)
 				var mid := str(_monster_at_tile.get(p, ""))
 				if mid.is_empty() or _awake_ids.has(mid):
 					continue
 				var same_room := hroom >= 0 and int(monsters[mid]["room"]) == hroom
-				if same_room or (_manhattan(hp, p) <= SIGHT_TILES and dungeon.has_line_of_sight(hp, p)):
+				if same_room or (_manhattan(hp, p) <= sight and dungeon.has_line_of_sight(hp, p)):
 					_wake(mid, "notices %s" % players[hid]["name"])
 	if mode == "explore" and _any_monster_awake() and not game_over:
 		_start_combat()
@@ -663,9 +651,10 @@ func _try_stabilize(hero: Dictionary, ally: Dictionary) -> void:
 			return
 		hero["has_action"] = false
 	var mod := Rules.ability_modifier(int(hero["abilities"]["wis"]))
-	var r := Rules.ability_check(dice, mod, STABILIZE_DC)
+	var dc := GameData.balance.stabilize_dc
+	var r := Rules.ability_check(dice, mod, dc)
 	add_log("roll", "%s tends to %s: Wisdom (Medicine) check, rolled %d%+d = %d vs DC %d, %s." % [
-		hero["name"], ally["name"], r["natural"], mod, r["total"], STABILIZE_DC, "SUCCESS" if r["success"] else "FAILURE"])
+		hero["name"], ally["name"], r["natural"], mod, r["total"], dc, "SUCCESS" if r["success"] else "FAILURE"])
 	if r["success"]:
 		ally["stable"] = true
 		add_log("combat", "%s is stable." % ally["name"])
@@ -699,32 +688,33 @@ func _revive(hero: Dictionary, hp: int) -> void:
 func _populate_room(room: Dictionary) -> void:
 	var rng := dungeon.rng_for("contents:%d" % room["id"])
 	var depth := int(room["depth"])
-	if rng.randf() < 0.45:
-		var budget := 0.25 + 0.125 * depth
-		var options: Array = monster_table.keys().filter(func(k): return float(monster_table[k]["cr"]) <= budget)
+	var b := GameData.balance
+	if rng.randf() < b.monster_chance:
+		var budget := b.cr_budget_base + b.cr_budget_per_depth * depth
+		var options: Array = GameData.monsters.keys().filter(func(k): return GameData.monsters[k].cr <= budget)
 		if not options.is_empty():
 			var key: String = options[rng.randi() % options.size()]
-			var count := rng.randi_range(1, clampi(1 + (depth >> 1), 1, 4))
+			var count := rng.randi_range(1, clampi(1 + (depth >> 1), 1, b.max_group))
 			for i in count:
 				_spawn_monster(key, room, rng, false)   # asleep until a hero sees it
-	if rng.randf() < 0.3:
-		_place_item(FLAVOR_ITEMS[rng.randi() % FLAVOR_ITEMS.size()], room, rng)
+	if rng.randf() < b.item_chance:
+		_place_item(GameData.flavor_items[rng.randi() % GameData.flavor_items.size()], room, rng)
 
 
 ## Places a creature in a room. `awake` creatures join (or start) the fight at once;
 ## sleeping ones wait until a hero sees them (_update_awareness).
 func _spawn_monster(key: String, room: Dictionary, rng: RandomNumberGenerator, awake: bool) -> bool:
-	var spec: Dictionary = monster_table[key]
+	var spec := GameData.monster(key)
 	var p := _random_free_tile(room, rng)
 	if p == NO_TILE:
 		return false
 	var id := "m%d" % _next_id
 	_next_id += 1
-	var hp := maxi(1, int(dice.roll(str(spec["hp"]))["total"]))
+	var hp := maxi(1, int(dice.roll(spec.hp)["total"]))
 	monsters[id] = {
-		"id": id, "key": key, "name": spec["name"], "pos": p, "hp": hp, "max_hp": hp,
-		"ac": spec["ac"], "attack_bonus": spec["attack_bonus"], "damage": spec["damage"],
-		"speed": spec["speed"], "dex": spec["dex"], "awake": false, "room": room["id"], "lost_turns": 0,
+		"id": id, "key": key, "name": spec.name, "pos": p, "hp": hp, "max_hp": hp,
+		"ac": spec.ac, "attack_bonus": spec.attack_bonus, "damage": spec.damage,
+		"speed": spec.speed, "dex": spec.dex, "awake": false, "room": room["id"], "lost_turns": 0,
 	}
 	_monster_at_tile[p] = id
 	if awake:
@@ -776,22 +766,22 @@ func _apply_gm_action(a: Dictionary, event: Dictionary) -> void:
 			var ab := str(a.get("ability", ""))
 			if not (ab in Rules.ABILITIES):
 				return
-			var dc := clampi(int(a.get("dc", 10)), 5, 30)
+			var dc := clampi(int(a.get("dc", 10)), GameData.balance.gm_dc_min, GameData.balance.gm_dc_max)
 			var mod := Rules.ability_modifier(int(hero["abilities"][ab]))
 			var r := Rules.ability_check(dice, mod, dc)
 			var text := "%s makes a %s check (DC %d) for \"%s\": rolled %d%+d = %d, %s." % [
 				hero["name"], Rules.ABILITY_NAMES[ab], dc, str(a.get("reason", "")).left(80),
 				r["natural"], mod, r["total"], "SUCCESS" if r["success"] else "FAILURE"]
 			add_log("roll", text)
-			if chain < MAX_GM_CHAIN:
+			if chain < GameData.balance.gm_max_chain:
 				gm_event.emit({"kind": "check_result", "text": text, "actor": actor_id, "chain": chain + 1})
 		"spawn_monster":
 			var key := str(a.get("monster", ""))
 			var rid := dungeon.room_at(hero["pos"])
-			if not monster_table.has(key) or rid < 0:
+			if not GameData.monsters.has(key) or rid < 0:
 				return
-			var count := clampi(int(a.get("count", 1)), 1, MAX_GM_SPAWNS_PER_ROOM)
-			count = mini(count, MAX_GM_SPAWNS_PER_ROOM - int(_gm_spawned.get(rid, 0)))
+			var count := clampi(int(a.get("count", 1)), 1, GameData.balance.gm_max_spawn_count)
+			count = mini(count, GameData.balance.gm_max_spawns_per_room - int(_gm_spawned.get(rid, 0)))
 			var rng := dungeon.rng_for("gm-spawn:%d:%d" % [rid, _gm_actions])
 			var spawned := 0
 			for i in count:
@@ -877,15 +867,3 @@ func _free_tile_near(center: Vector2i) -> Vector2i:
 				if dungeon and dungeon.get_tile(p) == DungeonGenerator.Tile.FLOOR and player_at(p).is_empty():
 					return p
 	return center
-
-
-func _load_monsters() -> Dictionary:
-	var out := {}
-	var text := FileAccess.get_file_as_string("res://data/srd/monsters.json")
-	var data = JSON.parse_string(text)
-	if typeof(data) != TYPE_DICTIONARY:
-		push_error("Could not read data/srd/monsters.json")
-		return out
-	for m in data.get("monsters", []):
-		out[str(m["key"])] = m
-	return out

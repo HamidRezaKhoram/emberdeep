@@ -9,10 +9,7 @@ extends RefCounted
 
 enum Tile { VOID = 0, FLOOR = 1, WALL = 2, DOOR_UNEXPLORED = 3, DOOR_OPEN = 4, RUBBLE = 5 }
 
-const ROOM_KINDS := ["chamber", "hall", "shrine", "crypt", "storeroom", "cavern", "library", "barracks", "well room", "kennel"]
 const DIRS := [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]
-const MAX_ATTEMPTS := 8
-const SHRINK_AFTER := 4
 
 var world_seed: int
 var tiles: Dictionary = {}      # Vector2i -> Tile
@@ -25,6 +22,7 @@ var _room_of: Dictionary = {}   # floor Vector2i -> room id. Index for room_at()
 
 func _init(seed_value: int = 1) -> void:
 	world_seed = seed_value
+	GameData.ensure_loaded()
 
 
 func rng_for(key: String) -> RandomNumberGenerator:
@@ -104,7 +102,8 @@ func unexplored_door_count() -> int:
 
 func create_start_room() -> Dictionary:
 	var rng := rng_for("start")
-	var room := _carve_room(Rect2i(-3, -3, 7, 6), 0, "entrance hall")
+	var rules := GameData.dungeon
+	var room := _carve_room(rules.start_rect, 0, rules.start_kind)
 	for d in DIRS:
 		_add_door_on_wall(room, d, rng)
 	return room
@@ -119,14 +118,15 @@ func open_door(p: Vector2i) -> Dictionary:
 	var d: Vector2i = info["dir"]
 	var parent: Dictionary = rooms[int(info["room"])]
 	var rng := rng_for("door:%d,%d" % [p.x, p.y])
-	for attempt in MAX_ATTEMPTS:
-		var length := rng.randi_range(1, 4)
-		var along := rng.randi_range(4, 9)
-		var across := rng.randi_range(4, 8)
-		if attempt >= SHRINK_AFTER:
-			length = 1
-			along = rng.randi_range(3, 4)
-			across = rng.randi_range(3, 4)
+	var rules := GameData.dungeon
+	for attempt in rules.max_attempts:
+		var length := rng.randi_range(rules.corridor_length.x, rules.corridor_length.y)
+		var along := rng.randi_range(rules.room_depth.x, rules.room_depth.y)
+		var across := rng.randi_range(rules.room_width.x, rules.room_width.y)
+		if attempt >= rules.shrink_after:
+			length = rules.corridor_length.x
+			along = rng.randi_range(rules.small_room.x, rules.small_room.y)
+			across = rng.randi_range(rules.small_room.x, rules.small_room.y)
 		var offset := rng.randi_range(0, across - 1)
 		var plan := _plan(p, d, length, along, across, offset)
 		if _fits(plan):
@@ -242,12 +242,13 @@ func _build(p: Vector2i, d: Vector2i, plan: Dictionary, parent: Dictionary, rng:
 	tiles[p] = Tile.DOOR_OPEN
 	doors.erase(p)
 	var depth: int = int(parent["depth"]) + 1
-	var kind: String = ROOM_KINDS[rng.randi() % ROOM_KINDS.size()]
+	var rules := GameData.dungeon
+	var kind: String = rules.room_kinds[rng.randi() % rules.room_kinds.size()]
 	var room := _carve_room(plan["rect"], depth, kind)
 	var entry: Vector2i = plan["entry"]
 	tiles[entry] = Tile.DOOR_OPEN
 	room["entry"] = entry
-	var exit_chance := 0.6 if depth < 6 else 0.4
+	var exit_chance := rules.exit_chance if depth < rules.deep_after else rules.exit_chance_deep
 	for nd in DIRS:
 		if nd == -d:
 			continue

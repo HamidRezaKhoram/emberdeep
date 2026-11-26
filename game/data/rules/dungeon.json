@@ -1,0 +1,15 @@
+{
+  "_note": "Map generation. Changing anything here changes the map a seed produces, so bump generator_version: saves made with another version are refused (docs/MAP_GENERATION.md).",
+  "generator_version": 1,
+  "start_room": {"position": [-3, -3], "size": [7, 6], "kind": "entrance hall"},
+  "max_attempts": 8,
+  "shrink_after": 4,
+  "corridor_length": [1, 4],
+  "room_depth": [4, 9],
+  "room_width": [4, 8],
+  "small_room": [3, 4],
+  "exit_chance": 0.6,
+  "exit_chance_deep": 0.4,
+  "deep_after": 6,
+  "room_kinds": ["chamber", "hall", "shrine", "crypt", "storeroom", "cavern", "library", "barracks", "well room", "kennel"]
+}

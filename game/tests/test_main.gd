@@ -7,6 +7,7 @@ var failures := 0
 
 
 func _ready() -> void:
+	_test_game_data()
 	_test_dice()
 	_test_rules()
 	_test_generator_determinism()
@@ -167,7 +168,7 @@ func _test_gm_validation() -> void:
 	good["monster"] = "goblin"
 	good["count"] = 9
 	GameState.apply_gm_response({"narration": "", "actions": [good, good]}, ev)
-	check(GameState.monsters.size() <= GameState.MAX_GM_SPAWNS_PER_ROOM, "GM spawns capped per room (%d)" % GameState.monsters.size())
+	check(GameState.monsters.size() <= GameData.balance.gm_max_spawns_per_room, "GM spawns capped per room (%d)" % GameState.monsters.size())
 	check(GameState.monsters.size() > 0 and GameState.mode == "combat", "a GM spawn starts combat")
 	var before := GameState.log_entries.size()
 	var chk := blank.duplicate()
@@ -613,3 +614,26 @@ func _state_hash() -> String:
 	ctx.start(HashingContext.HASH_SHA256)
 	ctx.update(var_to_bytes([snap, GameState.dice.rng.state]))
 	return ctx.finish().hex_encode()
+
+
+# --- data files ----------------------------------------------------------------------
+
+func _test_game_data() -> void:
+	var errs := GameData.load_all()
+	check(errs.is_empty(), "shipped data files load without errors %s" % str(errs))
+	check(GameData.monsters.size() >= 6 and GameData.monsters.has("goblin"), "monsters loaded")
+	check(GameData.hero_class("fighter").hp == 11, "fighter class loaded")
+	check(GameData.fingerprint.length() == 64, "data fingerprint is a SHA-256")
+	# the validator reports precise problems and falls back to safe values
+	var bad: Array[String] = []
+	var b := GameData.Balance.new(GameData._Reader.new({"speed_tiles": "fast", "sight_tiles": 2.5, "path_budget": 1}, "test.json", bad))
+	check(b.speed_tiles == 6 and b.sight_tiles == 8 and b.path_budget == 16, "bad values fall back to defaults or clamp")
+	var joined := "\n".join(bad)
+	check("speed_tiles: expected a number" in joined, "reports a wrong type")
+	check("sight_tiles: expected a whole number" in joined, "reports a fraction where a whole number is needed")
+	check("path_budget: 1 is outside" in joined, "reports an out-of-range value")
+	check("gm: missing" in joined, "reports a missing section")
+	var bad2: Array[String] = []
+	var m := GameData.MonsterSpec.new(GameData._Reader.new({"key": "x", "hp": "lots", "damage": "2d7"}, "m.json", bad2))
+	check(m.hp == "1d6" and m.damage == "1d4", "bad dice fall back")
+	check(bad2.size() >= 2 and "hp: 'lots' is not a dice expression" in "\n".join(bad2), "reports bad dice")

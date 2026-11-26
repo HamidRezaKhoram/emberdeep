@@ -29,13 +29,15 @@
    player intent. A broken or hostile reply can at worst produce odd narration.
 4. **Determinism.** Dice and generation are seeded. The map behind a door depends only on
    (seed, door position). Tests rely on this; so will saves and replays.
-5. **Data over code.** Monsters, prompts (and later spells, items, classes) are files in `game/data/`.
+5. **Data over code.** Every rules number, monster, class, item and prompt is a file in `game/data/`,
+   loaded and validated by `GameData` ([DATA.md](DATA.md)). Code holds no balance constants.
 
 ## Files
 
 | Path | Role |
 |---|---|
 | `game/scripts/core/game_state.gd` | Autoload `GameState`. Heroes, monsters, items, modes, initiative, log. Intent handling, combat, room population, GM action validation, snapshots. |
+| `game/scripts/core/game_data.gd` | `GameData`: loads and validates every file in `game/data/` into typed rules (balance, dungeon, classes, monsters, items); data fingerprint. See [DATA.md](DATA.md). |
 | `game/scripts/core/dice.gd` | `Dice`: seeded roller, `NdM+K` parser, d20 with advantage. |
 | `game/scripts/core/rules.gd` | `Rules`: SRD math (modifiers, checks, attacks, damage). Pure functions. |
 | `game/scripts/core/settings.gd` | `Settings`: `user://settings.cfg`, API key from env. |
@@ -46,6 +48,7 @@
 | `game/scripts/gm/game_master.gd` | `GameMaster`: event queue, prompt + history, schema, provider fallback. |
 | `game/scripts/gm/*_provider.gd` | `GMProvider` base + Anthropic, local OpenAI-compatible, offline. |
 | `game/scripts/main.gd` | Menu and HUD, built in code; keyboard input → intents. |
+| `game/data/rules/*.json` | Balance, dungeon generation, hero classes, items. |
 | `game/data/srd/monsters.json` | Stat blocks (placeholders until checked against SRD 5.2.1). |
 | `game/data/prompts/gm_system.md` | The GM system prompt. |
 | `game/tests/` | Headless test scene (`scripts/run-tests.sh`). |
