@@ -44,14 +44,16 @@ func _draw() -> void:
 	for id in GameState.monsters:
 		var m: Dictionary = GameState.monsters[id]
 		var r := Rect2(_px(m["pos"]) + Vector2(3, 3), Vector2(TILE - 6, TILE - 6))
-		draw_rect(r, Color("c0392b"))
+		draw_rect(r, Color("c0392b") if m.get("awake", true) else Color("6e2a22"))  # sleeping: dimmer
 		draw_string(font, _px(m["pos"]) + Vector2(0, TILE - 6), str(m["name"]).left(1), HORIZONTAL_ALIGNMENT_CENTER, TILE, 14, Color.WHITE)
 		if id == active:
 			draw_rect(r.grow(2), Color.YELLOW, false, 2.0)
 	for id in GameState.player_order:
 		var h: Dictionary = GameState.players[id]
 		var c: Color = HERO_COLORS[int(h["color"]) % HERO_COLORS.size()]
-		if int(h["hp"]) <= 0:
+		if h.get("dead", false):
+			c = Color("2a2a2a")
+		elif int(h["hp"]) <= 0:
 			c = c.darkened(0.6)
 		var center := _px(h["pos"]) + Vector2(TILE, TILE) / 2
 		draw_circle(center, TILE * 0.4, c)

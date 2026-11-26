@@ -18,7 +18,11 @@ Each milestone ends with something playable. Tick items as they land.
 - [ ] Character creation: 4 SRD classes (Fighter, Rogue, Cleric, Wizard), species, background, standard array
 - [ ] Skills + proficiency in checks; GM can ask for a *skill* (Perception, Stealth, Athletics...)
 - [ ] Advantage / disadvantage; the GM may grant it with a reason
-- [ ] Death saving throws, Stabilize, healing potions usable
+- [x] Death saving throws, Stabilize (Wisdom (Medicine) DC 10)
+- [ ] Healing potions usable
+- [x] Local encounters: creatures sleep until seen, chase along real paths (bounded A*), lose track when cut off
+- [x] Initiative ties by Dexterity; creatures can join a fight in progress
+- [x] Replay test: same seed + same inputs = identical game, with state invariants checked every step
 - [ ] Ranged attacks with line of sight; opportunity attacks
 - [ ] Short and long rests; Hit Dice
 - [ ] Save / load (seed + opened doors + entities + log + GM summary)

@@ -20,6 +20,7 @@ var revealed: Dictionary = {}   # Vector2i -> true (fog of war: what the party h
 var rooms: Array = []           # [{id, rect: Rect2i, depth, kind, center, entry}]
 var doors: Dictionary = {}      # unexplored door Vector2i -> {room: id, dir: Vector2i}
 var opened_doors: Array = []    # Vector2i, in the order they were opened (for saves)
+var _room_of: Dictionary = {}   # floor Vector2i -> room id. Index for room_at(); rebuilt, never sent.
 
 
 func _init(seed_value: int = 1) -> void:
@@ -48,12 +49,44 @@ func is_open_floor(p: Vector2i) -> bool:
 	return t == Tile.FLOOR or t == Tile.DOOR_OPEN
 
 
+## Creatures and light pass through these.
+func is_transparent(p: Vector2i) -> bool:
+	var t := get_tile(p)
+	return t == Tile.FLOOR or t == Tile.DOOR_OPEN
+
+
+## The room whose floor contains p, or -1 (corridors, walls, doors). O(1).
 func room_at(p: Vector2i) -> int:
-	for room in rooms:
-		var rect: Rect2i = room["rect"]
-		if rect.has_point(p):
-			return int(room["id"])
-	return -1
+	return int(_room_of.get(p, -1))
+
+
+## True when nothing opaque lies strictly between a and b. Symmetric: a sees b
+## exactly when b sees a (a line is traced both ways and either clear line counts).
+func has_line_of_sight(a: Vector2i, b: Vector2i) -> bool:
+	return _ray_clear(a, b) or _ray_clear(b, a)
+
+
+func _ray_clear(a: Vector2i, b: Vector2i) -> bool:
+	# Bresenham's line; the end points themselves may be opaque (a creature in a doorway).
+	var dx := absi(b.x - a.x)
+	var dy := -absi(b.y - a.y)
+	var sx := 1 if a.x < b.x else -1
+	var sy := 1 if a.y < b.y else -1
+	var err := dx + dy
+	var p := a
+	while true:
+		if p != a and p != b and not is_transparent(p):
+			return false
+		if p == b:
+			return true
+		var e2 := 2 * err
+		if e2 >= dy:
+			err += dy
+			p.x += sx
+		if e2 <= dx:
+			err += dx
+			p.y += sy
+	return true
 
 
 func room_floor_tiles(room: Dictionary) -> Array:
@@ -116,6 +149,16 @@ func from_dict(data: Dictionary) -> void:
 	revealed = data.get("revealed", {})
 	rooms = data.get("rooms", [])
 	doors = data.get("doors", {})
+	_room_of.clear()
+	for room in rooms:
+		_index_room(room)
+
+
+func _index_room(room: Dictionary) -> void:
+	var rect: Rect2i = room["rect"]
+	for x in range(rect.position.x, rect.end.x):
+		for y in range(rect.position.y, rect.end.y):
+			_room_of[Vector2i(x, y)] = int(room["id"])
 
 
 # --- internals -------------------------------------------------------------
@@ -134,6 +177,7 @@ func _carve_room(rect: Rect2i, depth: int, kind: String) -> Dictionary:
 				tiles[p] = Tile.WALL
 			revealed[p] = true
 	rooms.append(room)
+	_index_room(room)
 	return room
 
 

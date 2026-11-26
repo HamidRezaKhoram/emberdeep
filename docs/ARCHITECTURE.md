@@ -39,7 +39,8 @@
 | `game/scripts/core/dice.gd` | `Dice`: seeded roller, `NdM+K` parser, d20 with advantage. |
 | `game/scripts/core/rules.gd` | `Rules`: SRD math (modifiers, checks, attacks, damage). Pure functions. |
 | `game/scripts/core/settings.gd` | `Settings`: `user://settings.cfg`, API key from env. |
-| `game/scripts/world/dungeon_generator.gd` | `DungeonGenerator`: door-driven room accretion, fog of war. |
+| `game/scripts/world/dungeon_generator.gd` | `DungeonGenerator`: door-driven room accretion, fog of war, line of sight, O(1) `room_at()` through a tile → room index. |
+| `game/scripts/world/pathfinder.gd` | `Pathfinder`: A* on the tile grid with a cap on tiles expanded, so cost doesn't grow with the map. Deterministic tie-breaking. |
 | `game/scripts/world/map_view.gd` | Draws revealed tiles and tokens; camera follows the acting hero. |
 | `game/scripts/net/network.gd` | Autoload `Net`: ENet host/join, intents, snapshots, LAN beacon. |
 | `game/scripts/gm/game_master.gd` | `GameMaster`: event queue, prompt + history, schema, provider fallback. |
@@ -52,9 +53,24 @@
 ## State shapes
 
 Hero: `{id, name, owner, class, level, abilities{str..cha}, hp, max_hp, ac, attack_bonus,
-damage, weapon, pos: Vector2i, moves_left, has_action, inventory[], color}`
+damage, weapon, pos: Vector2i, moves_left, has_action, inventory[], color,
+death_successes, death_failures, stable, dead}`
 
-Monster: `{id, key, name, pos, hp, max_hp, ac, attack_bonus, damage, speed, dex, awake, room}`
+Monster: `{id, key, name, pos, hp, max_hp, ac, attack_bonus, damage, speed, dex, awake, room, lost_turns}`
+
+## Scaling rules
+
+The dungeon has no size limit, so per-action costs must not grow with it:
+
+- **Indexes for lookups.** `GameState._monster_at_tile` (tile → monster) and `_awake_ids`, and
+  `DungeonGenerator._room_of` (tile → room) make `monster_at()` and `room_at()` O(1). They are
+  derived data: kept in step by the functions that move, spawn, remove, wake and sleep creatures
+  (`move_monster`, `_spawn_monster`, `_remove_monster`, `_wake`, `_sleep`), rebuilt after a
+  snapshot, and never sent over the network. Never assign `monster["pos"]` directly.
+- **Local work only.** Awareness scans the tiles around each hero, not every creature.
+  Path searches stop after `PATH_BUDGET` tiles. Only awake creatures enter initiative.
+- **Measured** at 300 rooms / 21k tiles / 300 creatures: opening a door 0.06 ms, `room_at` and
+  `monster_at` 0.2 µs each.
 
 Room: `{id, rect: Rect2i, depth, kind, center, entry}`
 
@@ -66,5 +82,5 @@ GM event: `{kind: "room_revealed"|"player_action"|"check_result"|"combat_over", 
 
 - Snapshots send the whole state; the map only when it changed. Switch to deltas when rooms number in the hundreds.
 - UI is built in code. Move to scenes and a Theme once the layout settles.
-- `room_at()` is a linear scan. Use a spatial index (tile → room id) when it shows up in a profile.
+- The map view redraws every revealed tile on each change; move to `TileMapLayer` (chunked, cached).
 - No save/load yet. Plan: seed + `opened_doors` + heroes + monsters + log + GM summary, as JSON in `user://saves/`.

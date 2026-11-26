@@ -294,7 +294,8 @@ func _on_state_changed() -> void:
 	for id in GameState.player_order:
 		var h: Dictionary = GameState.players[id]
 		var marker := ">" if id == _acting_id() else " "
-		lines.append("%s %s  HP %d/%d  AC %d" % [marker, h["name"], h["hp"], h["max_hp"], h["ac"]])
+		var cond := GameState.hero_condition(h)
+		lines.append("%s %s  HP %d/%d  AC %d%s" % [marker, h["name"], h["hp"], h["max_hp"], h["ac"], "" if cond == "ok" else "  (" + cond + ")"])
 	var header := "Exploring" if GameState.mode == "explore" else "COMBAT, round %d" % GameState.round_num
 	var cur := GameState.current_actor()
 	if GameState.players.has(cur):

@@ -16,6 +16,16 @@ func _ready() -> void:
 	_test_combat_terminates()
 	_test_kill_keeps_turn()
 	_test_snapshot_roundtrip()
+	_test_pathfinder()
+	_test_line_of_sight()
+	_test_room_index()
+	_test_encounters_are_local()
+	_test_lose_track_ends_combat()
+	_test_many_monsters_in_initiative()
+	_test_initiative_ties()
+	_test_death_saves()
+	_test_stabilize()
+	_test_replay_determinism()
 	print("\n%d passed, %d failed" % [passes, failures])
 	get_tree().quit(1 if failures > 0 else 0)
 
@@ -214,7 +224,7 @@ func _test_kill_keeps_turn() -> void:
 			spot = d
 			break
 	check(spot != Vector2i.ZERO, "free tile next to hero")
-	victim["pos"] = hero["pos"] + spot
+	GameState.move_monster(mids[0], hero["pos"] + spot)
 	victim["hp"] = 1
 	victim["ac"] = -50
 	GameState.initiative = [mids[0], hid, mids[1]]
@@ -236,3 +246,370 @@ func _test_snapshot_roundtrip() -> void:
 	GameState.apply_snapshot(snap)
 	check(GameState.dungeon != null and GameState.dungeon.tiles == tiles_before, "snapshot restores the map")
 	check(GameState.player_order.size() == 1, "snapshot restores the party")
+
+
+# --- Phase A: pathfinding, awareness, death saves, replay ----------------------------
+
+## A 10x5 field with a wall at x=5 that has one gap at the bottom.
+func _field_passable(p: Vector2i) -> bool:
+	if p.x < 0 or p.y < 0 or p.x > 9 or p.y > 4:
+		return false
+	return not (p.x == 5 and p.y < 4)
+
+
+func _test_pathfinder() -> void:
+	var path := Pathfinder.find_path(Vector2i(0, 0), Vector2i(9, 0), _field_passable)
+	check(path.size() == 17, "A* detours through the gap: 17 steps (got %d)" % path.size())
+	check(not path.is_empty() and path[-1] == Vector2i(9, 0), "path ends at the goal")
+	var ok := true
+	var prev := Vector2i(0, 0)
+	for p in path:
+		if absi(p.x - prev.x) + absi(p.y - prev.y) != 1 or not _field_passable(p):
+			ok = false
+		prev = p
+	check(ok, "every step is one tile and passable")
+	check(path == Pathfinder.find_path(Vector2i(0, 0), Vector2i(9, 0), _field_passable), "A* is deterministic")
+	var sealed := func(p: Vector2i) -> bool: return _field_passable(p) and p != Vector2i(5, 4)
+	check(Pathfinder.find_path(Vector2i(0, 0), Vector2i(9, 0), sealed).is_empty(), "no path through a sealed wall")
+	check(Pathfinder.find_path(Vector2i(0, 0), Vector2i(9, 0), _field_passable, 5).is_empty(), "search stops at its budget")
+	check(Pathfinder.find_path(Vector2i(2, 2), Vector2i(2, 2), _field_passable).is_empty(), "start == goal: empty path")
+
+
+func _test_line_of_sight() -> void:
+	var g := DungeonGenerator.new(1)
+	for x in 10:
+		for y in 5:
+			g.tiles[Vector2i(x, y)] = DungeonGenerator.Tile.FLOOR
+	for y in 4:
+		g.tiles[Vector2i(5, y)] = DungeonGenerator.Tile.WALL
+	check(g.has_line_of_sight(Vector2i(0, 4), Vector2i(9, 4)), "clear row: can see")
+	check(not g.has_line_of_sight(Vector2i(0, 1), Vector2i(9, 1)), "wall in the way: cannot see")
+	check(g.has_line_of_sight(Vector2i(1, 0), Vector2i(4, 3)) == g.has_line_of_sight(Vector2i(4, 3), Vector2i(1, 0)), "line of sight is symmetric")
+
+
+func _test_room_index() -> void:
+	var g := DungeonGenerator.new(9)
+	g.create_start_room()
+	_open_doors(g, 30)
+	var g2 := DungeonGenerator.new(9)
+	g2.from_dict(g.to_dict())
+	var mismatches := 0
+	for p in g.tiles:
+		var scan := -1
+		for room in g.rooms:
+			if (room["rect"] as Rect2i).has_point(p):
+				scan = int(room["id"])
+		if g.room_at(p) != scan or g2.room_at(p) != scan:
+			mismatches += 1
+	check(mismatches == 0, "room index matches a full scan, also after from_dict (%d mismatches)" % mismatches)
+
+
+## The farthest room from the start, for placing creatures out of sight.
+func _far_room() -> Dictionary:
+	var start: Vector2i = GameState.dungeon.rooms[0]["center"]
+	var best: Dictionary = {}
+	var best_d := -1
+	for room in GameState.dungeon.rooms:
+		var c: Vector2i = room["center"]
+		var dist := absi(c.x - start.x) + absi(c.y - start.y)
+		if dist > best_d:
+			best = room
+			best_d = dist
+	return best
+
+
+func _grow(n: int) -> void:
+	for i in n:
+		if GameState.dungeon.doors.is_empty():
+			return
+		var keys: Array = GameState.dungeon.doors.keys()
+		keys.sort()
+		GameState.dungeon.open_door(keys[0])
+
+
+## Steps the first hero onto any free floor tile next to it.
+func _step_somewhere(id: String) -> void:
+	var p: Vector2i = GameState.players[id]["pos"]
+	for d in DungeonGenerator.DIRS:
+		var q: Vector2i = p + d
+		if GameState.dungeon.get_tile(q) == DungeonGenerator.Tile.FLOOR and GameState.player_at(q).is_empty() and GameState.monster_at(q).is_empty():
+			GameState.handle_intent(1, {"type": "move", "dir": d, "actor": id})
+			return
+
+
+func _test_encounters_are_local() -> void:
+	GameState.new_game(404, ["Ira"], 1)
+	var hid: String = GameState.player_order[0]
+	_grow(30)
+	var far := _far_room()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1
+	check(GameState._spawn_monster("goblin", far, rng, false), "spawned a sleeping goblin far away")
+	_step_somewhere(hid)
+	check(GameState.mode == "explore", "a sleeping creature out of sight does not start a fight")
+	check(GameState._spawn_monster("giant_rat", GameState.dungeon.rooms[0], rng, false), "spawned a sleeping rat in the hero's room")
+	_step_somewhere(hid)
+	check(GameState.mode == "combat", "a creature in the hero's room wakes and starts a fight")
+	var far_in_fight := false
+	for id in GameState.initiative:
+		if GameState.monsters.has(id) and int(GameState.monsters[id]["room"]) == int(far["id"]):
+			far_in_fight = true
+	check(not far_in_fight, "the far goblin stays out of the fight")
+	check(GameState.initiative.size() == 2, "initiative = the hero and the rat (got %d)" % GameState.initiative.size())
+
+
+## An awake creature with no route to the party gives up, and the fight ends.
+func _test_lose_track_ends_combat() -> void:
+	GameState.new_game(505, ["Jo"], 1)
+	var hid: String = GameState.player_order[0]
+	var pocket := Vector2i(400, 400)
+	GameState.dungeon.tiles[pocket] = DungeonGenerator.Tile.FLOOR
+	var fake_room := {"id": -7, "rect": Rect2i(pocket, Vector2i.ONE), "entry": Vector2i.ZERO}
+	var rng := RandomNumberGenerator.new()
+	check(GameState._spawn_monster("orc", fake_room, rng, true), "spawned an awake orc in a sealed pocket")
+	GameState._update_awareness()
+	check(GameState.mode == "combat", "an awake creature starts a fight")
+	for i in 6:
+		if GameState.mode != "combat":
+			break
+		GameState.handle_intent(1, {"type": "end_turn", "actor": hid})
+	check(GameState.mode == "explore", "the orc loses track and the fight ends")
+	check(GameState.monsters.size() == 1 and not GameState.monsters.values()[0]["awake"], "the orc is asleep again")
+
+
+## Initiative used to stop after 64 entries; big fights must still reach a hero's turn.
+func _test_many_monsters_in_initiative() -> void:
+	GameState.new_game(606, ["Kai"], 1)
+	var hid: String = GameState.player_order[0]
+	var rng := RandomNumberGenerator.new()
+	for i in 100:
+		var p := Vector2i(1000 + i * 3, 1000)
+		GameState.dungeon.tiles[p] = DungeonGenerator.Tile.FLOOR
+		GameState._spawn_monster("giant_rat", {"id": -100 - i, "rect": Rect2i(p, Vector2i.ONE), "entry": Vector2i.ZERO}, rng, true)
+	var t0 := Time.get_ticks_msec()
+	GameState._update_awareness()
+	check(GameState.mode == "combat" and GameState.initiative.size() == 101, "101 actors in initiative")
+	check(GameState.current_actor() == hid, "the hero gets a turn despite 100 monsters")
+	for i in 4:
+		if GameState.mode != "combat":
+			break
+		GameState.handle_intent(1, {"type": "end_turn", "actor": hid})
+	check(GameState.mode == "explore", "all 100 lose track and the fight ends")
+	check(Time.get_ticks_msec() - t0 < 2000, "100-monster fight resolves in under 2 s (%d ms)" % (Time.get_ticks_msec() - t0))
+
+
+func _test_initiative_ties() -> void:
+	GameState.new_game(707, ["Lu", "Mo"], 1)
+	var a: String = GameState.player_order[0]
+	var b: String = GameState.player_order[1]
+	GameState._init_order = {a: [12, 10], b: [12, 16], "m50": [12, 16], "m7": [15, 8]}
+	var ids: Array = [a, "m50", b, "m7"]
+	ids.sort_custom(GameState._goes_before)
+	check(ids == ["m7", b, "m50", a], "initiative: total, then Dexterity, then heroes first (got %s)" % str(ids))
+	GameState._init_order.clear()
+
+
+## Checks every death-save outcome against an independent roll of the same die.
+func _test_death_saves() -> void:
+	GameState.new_game(808, ["Nia"], 1)
+	var hero: Dictionary = GameState.players[GameState.player_order[0]]
+	var seen := {}
+	for s in range(1, 200):
+		GameState.dice = Dice.new(s)
+		var twin := Dice.new(s)
+		hero["hp"] = 0
+		hero["death_successes"] = 0
+		hero["death_failures"] = 0
+		hero["stable"] = false
+		hero["dead"] = false
+		var n := int(twin.d20()["natural"])
+		GameState._death_save(hero)
+		var ok := true
+		if n == 20:
+			ok = hero["hp"] == 1 and hero["death_failures"] == 0
+			seen["20"] = true
+		elif n == 1:
+			ok = hero["death_failures"] == 2
+			seen["1"] = true
+		elif n >= 10:
+			ok = hero["death_successes"] == 1 and hero["hp"] == 0
+			seen["hi"] = true
+		else:
+			ok = hero["death_failures"] == 1
+			seen["lo"] = true
+		if not ok:
+			check(false, "death save with natural %d (seed %d)" % [n, s])
+			return
+		# play it out: always resolved within 4 more saves
+		var rolls := 1
+		while GameState.is_dying(hero) and rolls < 6:
+			GameState._death_save(hero)
+			rolls += 1
+		if GameState.is_dying(hero):
+			check(false, "death saves resolve within 5 rolls (seed %d)" % s)
+			return
+		if hero["dead"] and int(hero["death_failures"]) < 3:
+			check(false, "dead only after 3 failures (seed %d)" % s)
+			return
+	check(seen.size() == 4, "saw natural 1, 20, a success and a failure (%s)" % str(seen.keys()))
+	check(true, "death saves follow the SRD over 199 seeds")
+
+
+func _test_stabilize() -> void:
+	GameState.new_game(909, ["Oz", "Pia"], 1)
+	var a: Dictionary = GameState.players[GameState.player_order[0]]
+	var b: Dictionary = GameState.players[GameState.player_order[1]]
+	var dir := Vector2i.ZERO
+	for d in DungeonGenerator.DIRS:
+		if GameState.dungeon.get_tile(a["pos"] + d) == DungeonGenerator.Tile.FLOOR:
+			dir = d
+			break
+	b["pos"] = a["pos"] + dir
+	b["hp"] = 0
+	var start: Vector2i = a["pos"]
+	for i in 50:
+		if not GameState.is_dying(b):
+			break
+		GameState.handle_intent(1, {"type": "move", "dir": dir, "actor": a["id"]})
+	check(a["pos"] == start, "tending a dying ally does not step onto them")
+	check(int(b["hp"]) == 1 and not b["stable"], "stabilized out of combat, the ally comes to with 1 HP")
+
+
+# --- replay: same seed + same inputs = same game -------------------------------------
+
+func _test_replay_determinism() -> void:
+	for s in [3, 17, 4242, 90001]:
+		var first := _bot_game(s, 300)
+		var invariant_err: String = first["error"]
+		check(invariant_err.is_empty(), "seed %d: invariants hold every step (%s)" % [s, invariant_err])
+		check(int(first["rooms"]) >= 3, "seed %d: the bot explored (%d rooms)" % [s, first["rooms"]])
+		var second := _bot_game(s, 300)
+		check(first["hash"] == second["hash"], "seed %d: replay gives the identical final state" % s)
+
+
+## Plays a seeded 2-hero game through handle_intent only (no UI): walk to doors,
+## fight what wakes up, tend dying allies. Returns {hash, rooms, error}.
+func _bot_game(seed_value: int, steps: int) -> Dictionary:
+	GameState.new_game(seed_value, ["Ann", "Bob"], 1)
+	var err := ""
+	for i in steps:
+		if GameState.game_over:
+			break
+		var id := _bot_actor()
+		if id.is_empty():
+			break
+		var d := _bot_step(id)
+		if d == Vector2i.ZERO:
+			if GameState.mode != "combat":
+				break
+			GameState.handle_intent(1, {"type": "end_turn", "actor": id})
+		else:
+			GameState.handle_intent(1, {"type": "move", "dir": d, "actor": id})
+		if err.is_empty():
+			err = _invariant_error()
+			if not err.is_empty():
+				err = "step %d: %s" % [i, err]
+	return {"hash": _state_hash(), "rooms": GameState.dungeon.rooms.size(), "error": err}
+
+
+func _bot_actor() -> String:
+	if GameState.mode == "combat":
+		var cur := GameState.current_actor()
+		return cur if GameState.players.has(cur) else ""
+	var alive := GameState.living_players()
+	return alive[0] if not alive.is_empty() else ""
+
+
+func _bot_step(id: String) -> Vector2i:
+	var hero: Dictionary = GameState.players[id]
+	var start: Vector2i = hero["pos"]
+	var combat := GameState.mode == "combat"
+	var can_act: bool = hero["has_action"] or not combat
+	for d in DungeonGenerator.DIRS:
+		var q: Vector2i = start + d
+		if can_act and (not GameState.monster_at(q).is_empty() or not GameState._dying_ally_at(q).is_empty()):
+			return d
+	if combat and int(hero["moves_left"]) <= 0:
+		return Vector2i.ZERO
+	var first := {start: Vector2i.ZERO}
+	var queue: Array = [start]
+	while not queue.is_empty():
+		var p: Vector2i = queue.pop_front()
+		if p != start:
+			var goal := false
+			for d in DungeonGenerator.DIRS:
+				if not GameState._dying_ally_at(p + d).is_empty() or (combat and not GameState.monster_at(p + d).is_empty()):
+					goal = true
+			if not combat and GameState.dungeon.get_tile(p) == DungeonGenerator.Tile.DOOR_UNEXPLORED:
+				goal = true
+			if goal:
+				return first[p]
+		if GameState.dungeon.get_tile(p) == DungeonGenerator.Tile.DOOR_UNEXPLORED:
+			continue
+		for d in DungeonGenerator.DIRS:
+			var q: Vector2i = p + d
+			if first.has(q) or not GameState.dungeon.is_walkable(q):
+				continue
+			if not GameState.player_at(q).is_empty() or not GameState.monster_at(q).is_empty() or not GameState._dying_ally_at(q).is_empty():
+				continue
+			first[q] = d if p == start else first[p]
+			queue.append(q)
+	return Vector2i.ZERO
+
+
+## Rules that must hold after every input. Returns "" or what broke.
+func _invariant_error() -> String:
+	var gs := GameState
+	if gs._monster_at_tile.size() != gs.monsters.size():
+		return "tile index has %d entries for %d monsters" % [gs._monster_at_tile.size(), gs.monsters.size()]
+	var awake := 0
+	for id in gs.monsters:
+		var m: Dictionary = gs.monsters[id]
+		if gs._monster_at_tile.get(m["pos"]) != id:
+			return "tile index wrong for %s" % id
+		if m["awake"] != gs._awake_ids.has(id):
+			return "awake index wrong for %s" % id
+		if m["awake"]:
+			awake += 1
+			if gs.mode == "combat" and not gs.initiative.has(id):
+				return "awake %s is not in initiative" % id
+		elif gs.initiative.has(id):
+			return "sleeping %s is in initiative" % id
+		if not gs.player_at(m["pos"]).is_empty():
+			return "%s shares a tile with a hero" % id
+	if gs.mode == "explore" and (awake > 0 or not gs.initiative.is_empty()) and not gs.game_over:
+		return "exploring with %d awake monsters" % awake
+	if gs.mode == "combat":
+		if gs.turn_index < 0 or gs.turn_index >= gs.initiative.size():
+			return "turn_index %d out of range" % gs.turn_index
+		for id in gs.initiative:
+			if not gs.players.has(id) and not gs.monsters.has(id):
+				return "initiative holds unknown %s" % id
+	var tiles := {}
+	for id in gs.player_order:
+		var h: Dictionary = gs.players[id]
+		if int(h["hp"]) < 0 or int(h["hp"]) > int(h["max_hp"]):
+			return "%s has %d HP" % [id, h["hp"]]
+		if h["dead"] and int(h["hp"]) != 0:
+			return "%s is dead with HP" % id
+		if int(h["hp"]) > 0:
+			if tiles.has(h["pos"]):
+				return "two heroes on one tile"
+			tiles[h["pos"]] = true
+	return ""
+
+
+## Hash of everything that defines the game. map_version and log sequence numbers
+## are left out on purpose: they count up across games so network clients can tell
+## new data from old, so they differ between two runs of the same game.
+func _state_hash() -> String:
+	var snap := GameState.to_snapshot(true)
+	snap.erase("map_version")
+	var texts: Array = []
+	for e in GameState.log_entries:
+		texts.append([e["kind"], e["text"]])
+	snap["log"] = texts
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(var_to_bytes([snap, GameState.dice.rng.state]))
+	return ctx.finish().hex_encode()

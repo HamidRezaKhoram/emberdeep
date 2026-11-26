@@ -16,6 +16,11 @@ const MAX_LOG := 200
 const MAX_GM_SPAWNS_PER_ROOM := 3
 const MAX_GM_ACTIONS_PER_TURN := 4
 const MAX_GM_CHAIN := 2         # how many follow-up GM calls one event may cause
+const SIGHT_TILES := 8          # how far a sleeping creature notices a hero (40 ft, needs line of sight)
+const LOSE_TRACK_TURNS := 2     # an awake creature with no route to the party for this many turns gives up
+const PATH_BUDGET := 512        # max tiles one creature's path search may expand (cost is map-size independent)
+const STABILIZE_DC := 10        # Wisdom (Medicine) check to stabilize a dying ally (SRD 5.2.1)
+const NO_TILE := Vector2i(-99999, -99999)
 const FLAVOR_ITEMS := [
 	"a pouch of tarnished coins", "a potion of healing", "a rusted key",
 	"a torn map fragment", "a silver holy symbol", "a coil of hempen rope",
@@ -39,6 +44,13 @@ var log_entries: Array = []
 var log_seq: int = 0
 var _next_id: int = 1
 var _gm_spawned: Dictionary = {}     # room id -> monsters the GM added there
+var _gm_actions: int = 0             # GM actions applied this game; seeds GM placement RNGs
+# Indexes, so lookups stay O(1) however many creatures the dungeon holds.
+# Derived from `monsters`: kept in step by _place_monster/_remove_monster/_wake/_sleep
+# and rebuilt by _rebuild_indexes() after a snapshot. Never sent over the network.
+var _monster_at_tile: Dictionary = {}  # Vector2i -> monster id
+var _awake_ids: Dictionary = {}        # monster id -> true
+var _init_order: Dictionary = {}       # actor id -> [initiative total, dex score], combat only
 
 
 func _ready() -> void:
@@ -60,6 +72,10 @@ func new_game(seed_value: int, hero_names: Array, owner_peer: int = 1) -> void:
 	initiative.clear()
 	log_entries.clear()
 	_gm_spawned.clear()
+	_gm_actions = 0
+	_monster_at_tile.clear()
+	_awake_ids.clear()
+	_init_order.clear()
 	mode = "explore"
 	turn_index = 0
 	round_num = 0
@@ -85,6 +101,8 @@ func add_player(hero_name: String, owner_peer: int) -> String:
 		"hp": 11, "max_hp": 11, "ac": 16, "attack_bonus": 4, "damage": "1d8+2", "weapon": "longsword",
 		"pos": Vector2i.ZERO, "moves_left": SPEED_TILES, "has_action": true,
 		"inventory": [], "color": player_order.size(),
+		# at 0 HP: dying until 3 successes (stable) or 3 failures (dead); see _death_save()
+		"death_successes": 0, "death_failures": 0, "stable": false, "dead": false,
 	}
 	if hero["name"] == "":
 		hero["name"] = "Hero %d" % (player_order.size() + 1)
@@ -92,7 +110,7 @@ func add_player(hero_name: String, owner_peer: int) -> String:
 	players[id] = hero
 	player_order.append(id)
 	if mode == "combat":
-		initiative.append(id)
+		_join_initiative(id)
 	add_log("system", "%s joins the party." % hero["name"])
 	changed.emit()
 	return id
@@ -144,13 +162,12 @@ func current_actor() -> String:
 	return str(initiative[turn_index % initiative.size()])
 
 
+## The monster standing on p, or "". O(1) through the tile index.
 func monster_at(p: Vector2i) -> String:
-	for id in monsters:
-		if monsters[id]["pos"] == p:
-			return id
-	return ""
+	return str(_monster_at_tile.get(p, ""))
 
 
+## A conscious hero standing on p, or "". Heroes are few (at most 6), so a scan is fine.
 func player_at(p: Vector2i) -> String:
 	for id in players:
 		if players[id]["pos"] == p and int(players[id]["hp"]) > 0:
@@ -160,6 +177,20 @@ func player_at(p: Vector2i) -> String:
 
 func living_players() -> Array:
 	return player_order.filter(func(id): return int(players[id]["hp"]) > 0)
+
+
+## A hero at 0 HP who is neither stable nor dead.
+func is_dying(hero: Dictionary) -> bool:
+	return int(hero["hp"]) <= 0 and not hero.get("stable", false) and not hero.get("dead", false)
+
+
+## Moves a monster and keeps the tile index in step. Tests use it too.
+func move_monster(id: String, p: Vector2i) -> void:
+	var m: Dictionary = monsters[id]
+	if _monster_at_tile.get(m["pos"]) == id:
+		_monster_at_tile.erase(m["pos"])
+	m["pos"] = p
+	_monster_at_tile[p] = id
 
 
 # --- AI game master ------------------------------------------------------------
@@ -187,7 +218,7 @@ func summary_for_gm(actor_id: String) -> Dictionary:
 	var party: Array = []
 	for id in player_order:
 		var h: Dictionary = players[id]
-		party.append({"id": id, "name": h["name"], "class": h["class"], "level": h["level"], "hp": "%d/%d" % [h["hp"], h["max_hp"]]})
+		party.append({"id": id, "name": h["name"], "class": h["class"], "level": h["level"], "hp": "%d/%d" % [h["hp"], h["max_hp"]], "condition": hero_condition(h)})
 	var room_info := {}
 	if players.has(actor_id):
 		var rid := dungeon.room_at(players[actor_id]["pos"])
@@ -233,12 +264,33 @@ func apply_snapshot(s: Dictionary) -> void:
 		dungeon = DungeonGenerator.new(world_seed)
 		dungeon.from_dict(s["map"])
 		map_version = int(s.get("map_version", 0))
+	_rebuild_indexes()
 	for e in s.get("log", []):
 		if int(e["seq"]) > log_seq:
 			log_seq = int(e["seq"])
 			log_entries.append(e)
 			log_added.emit(e)
 	changed.emit()
+
+
+func _rebuild_indexes() -> void:
+	_monster_at_tile.clear()
+	_awake_ids.clear()
+	for id in monsters:
+		_monster_at_tile[monsters[id]["pos"]] = id
+		if monsters[id].get("awake", false):
+			_awake_ids[id] = true
+
+
+## "ok", "dying (2 successes, 1 failure)", "stable", or "dead": for the HUD and the GM.
+func hero_condition(h: Dictionary) -> String:
+	if h.get("dead", false):
+		return "dead"
+	if int(h["hp"]) > 0:
+		return "ok"
+	if h.get("stable", false):
+		return "unconscious, stable"
+	return "dying (%d successes, %d failures)" % [int(h.get("death_successes", 0)), int(h.get("death_failures", 0))]
 
 
 func add_log(kind: String, text: String) -> void:
@@ -264,9 +316,17 @@ func _intent_move(hero: Dictionary, d: Vector2i) -> void:
 			add_log("system", "%s has already attacked this turn (Space ends the turn)." % hero["name"])
 			return
 		_hero_attacks(hero, monsters[mid])
+		if monsters.has(mid):
+			_wake(mid, "is attacked")   # a sleeping creature you hit wakes up
 		if mode == "combat":
 			hero["has_action"] = false
+		_update_awareness()
+		if mode == "combat":
 			_maybe_auto_end(hero)
+		return
+	var ally := _dying_ally_at(target)
+	if not ally.is_empty():
+		_try_stabilize(hero, players[ally])
 		return
 	if mode == "combat" and int(hero["moves_left"]) <= 0:
 		return
@@ -285,9 +345,9 @@ func _intent_move(hero: Dictionary, d: Vector2i) -> void:
 	_pick_up_items(hero)
 	if mode == "combat":
 		hero["moves_left"] = int(hero["moves_left"]) - 1
+	_update_awareness()
+	if mode == "combat" and current_actor() == hero["id"]:
 		_maybe_auto_end(hero)
-	elif _any_monster_awake():
-		_start_combat()
 
 
 func _hero_attacks(hero: Dictionary, m: Dictionary) -> void:
@@ -301,8 +361,7 @@ func _hero_attacks(hero: Dictionary, m: Dictionary) -> void:
 		add_log("combat", "%s misses the %s (rolled %d, total %d vs AC %d)." % [hero["name"], m["name"], r["natural"], r["total"], m["ac"]])
 	if int(m["hp"]) <= 0:
 		add_log("combat", "The %s falls." % m["name"])
-		monsters.erase(m["id"])
-		_remove_from_initiative(m["id"])
+		_remove_monster(str(m["id"]))
 		_check_combat_over()
 
 
@@ -313,32 +372,82 @@ func _monster_attacks(m: Dictionary, hero: Dictionary) -> void:
 		hero["hp"] = maxi(0, int(hero["hp"]) - dmg)
 		add_log("combat", "The %s hits %s for %d damage (rolled %d)." % [m["name"], hero["name"], dmg, r["natural"]])
 		if int(hero["hp"]) == 0:
-			add_log("combat", "%s drops, unconscious!" % hero["name"])
+			hero["death_successes"] = 0
+			hero["death_failures"] = 0
+			hero["stable"] = false
+			add_log("combat", "%s drops, unconscious and dying!" % hero["name"])
 	else:
 		add_log("combat", "The %s misses %s (rolled %d)." % [m["name"], hero["name"], r["natural"]])
 
 
+## Initiative: d20 + Dexterity modifier. Ties go to the higher Dexterity score,
+## then to whoever was listed first (heroes in party order, then monsters by id).
 func _start_combat() -> void:
 	mode = "combat"
 	round_num = 1
-	var rolls := {}
-	for id in living_players():
-		rolls[id] = dice.roll_die(20) + Rules.ability_modifier(int(players[id]["abilities"]["dex"]))
-	for id in monsters:
-		if monsters[id]["awake"]:
-			rolls[id] = dice.roll_die(20) + Rules.ability_modifier(int(monsters[id]["dex"]))
-	initiative = rolls.keys()
-	initiative.sort_custom(func(a, b): return rolls[a] > rolls[b])
+	_init_order.clear()
+	var ids: Array = []
+	for id in player_order:
+		if not players[id].get("dead", false):
+			ids.append(id)
+	for id in _sorted_awake_ids():
+		ids.append(id)
+	for id in ids:
+		_roll_initiative(id)
+	initiative = ids
+	initiative.sort_custom(_goes_before)
 	var names: Array = []
 	for id in initiative:
-		names.append("%s (%d)" % [_actor_name(id), rolls[id]])
+		names.append("%s (%d)" % [_actor_name(id), _init_order[id][0]])
 	add_log("combat", "Roll for initiative! " + ", ".join(names))
 	turn_index = -1
 	_advance_turn()
 
 
+func _roll_initiative(id: String) -> void:
+	var dex := int(players[id]["abilities"]["dex"]) if players.has(id) else int(monsters[id]["dex"])
+	_init_order[id] = [dice.roll_die(20) + Rules.ability_modifier(dex), dex]
+
+
+func _goes_before(a: String, b: String) -> bool:
+	var ka: Array = _init_order[a]
+	var kb: Array = _init_order[b]
+	if ka[0] != kb[0]:
+		return ka[0] > kb[0]
+	if ka[1] != kb[1]:
+		return ka[1] > kb[1]
+	return _actor_rank(a) < _actor_rank(b)
+
+
+## Stable order for ties: heroes by party order first, then monsters by spawn number.
+func _actor_rank(id: String) -> int:
+	if players.has(id):
+		return player_order.find(id)
+	return 1000 + id.trim_prefix("m").to_int()
+
+
+## Adds an actor to a fight in progress, at its place in the initiative order.
+## Inserting before the current actor shifts the pointer, so the turn doesn't jump.
+func _join_initiative(id: String) -> void:
+	if initiative.has(id):
+		return
+	_roll_initiative(id)
+	var idx := initiative.size()
+	for i in initiative.size():
+		if _goes_before(id, str(initiative[i])):
+			idx = i
+			break
+	initiative.insert(idx, id)
+	if idx <= turn_index:
+		turn_index += 1
+	add_log("combat", "%s joins the fight (initiative %d)." % [_actor_name(id), _init_order[id][0]])
+
+
 func _advance_turn() -> void:
-	for _guard in 64:
+	# Each actor gets at most a few passes; the cap only guards against bugs.
+	var guard := initiative.size() * 3 + 3
+	while guard > 0:
+		guard -= 1
 		if _check_combat_over() or game_over:
 			return
 		turn_index += 1
@@ -348,19 +457,32 @@ func _advance_turn() -> void:
 		var id := str(initiative[turn_index])
 		if players.has(id):
 			var hero: Dictionary = players[id]
-			if int(hero["hp"]) <= 0:
+			if hero.get("dead", false) or (int(hero["hp"]) <= 0 and hero.get("stable", false)):
 				continue
+			if int(hero["hp"]) <= 0:
+				_death_save(hero)
+				if int(hero["hp"]) <= 0:
+					continue   # still down: the turn passes on
 			hero["moves_left"] = SPEED_TILES
 			hero["has_action"] = true
 			add_log("system", "Round %d: %s's turn (move %d, attack by walking into a foe, Space to end)." % [round_num, hero["name"], SPEED_TILES])
 			return
 		if monsters.has(id):
 			_monster_turn(monsters[id])
+			if game_over:
+				return
+			if monsters.has(id) and not monsters[id]["awake"]:
+				# it lost track of the party during its turn: drop it from the fight here,
+				# without _remove_from_initiative(), which would re-enter this loop
+				initiative.remove_at(turn_index)
+				_init_order.erase(id)
+				turn_index -= 1
 
 
 ## Removing an actor must not shift whose turn it is: entries before the current
 ## one move the pointer back by one; removing the current actor passes the turn on.
 func _remove_from_initiative(id: String) -> void:
+	_init_order.erase(id)
 	var idx := initiative.find(id)
 	if idx < 0:
 		return
@@ -380,30 +502,58 @@ func _maybe_auto_end(hero: Dictionary) -> void:
 		_advance_turn()
 
 
+## A creature's turn: find a route to the nearest conscious hero (bounded A*),
+## walk up to its speed along it, attack if adjacent. A creature that has had no
+## route for LOSE_TRACK_TURNS turns in a row gives up and goes back to sleep.
 func _monster_turn(m: Dictionary) -> void:
-	var target := _nearest_living_player(m["pos"])
-	if target.is_empty():
+	var chase := _find_chase(m)
+	if chase.is_empty():
+		m["lost_turns"] = int(m.get("lost_turns", 0)) + 1
+		if int(m["lost_turns"]) >= LOSE_TRACK_TURNS:
+			add_log("combat", "The %s loses track of you." % m["name"])
+			_sleep(str(m["id"]))
 		return
+	m["lost_turns"] = 0
+	var target: Dictionary = players[chase["target"]]
+	var path: Array = chase["path"]
 	var steps := int(m["speed"])
-	while steps > 0 and _manhattan(m["pos"], players[target]["pos"]) > 1:
-		var best: Vector2i = m["pos"]
-		var best_dist := _manhattan(m["pos"], players[target]["pos"])
-		for d in DungeonGenerator.DIRS:
-			var q: Vector2i = m["pos"] + d
-			if dungeon.is_open_floor(q) and monster_at(q).is_empty() and player_at(q).is_empty():
-				var dist := _manhattan(q, players[target]["pos"])
-				if dist < best_dist:
-					best = q
-					best_dist = dist
-		if best == m["pos"]:
-			break
-		m["pos"] = best
+	var i := 0
+	while steps > 0 and _manhattan(m["pos"], target["pos"]) > 1 and i < path.size() - 1:
+		var next: Vector2i = path[i]
+		if not monster_at(next).is_empty() or not player_at(next).is_empty():
+			break   # someone stepped into the way since the path was planned
+		move_monster(str(m["id"]), next)
+		i += 1
 		steps -= 1
-	if _manhattan(m["pos"], players[target]["pos"]) == 1:
-		_monster_attacks(m, players[target])
+	if _manhattan(m["pos"], target["pos"]) == 1:
+		_monster_attacks(m, target)
 	if living_players().is_empty():
 		game_over = true
 		add_log("system", "The party has fallen. Press R to start a new delve.")
+
+
+## {target: hero id, path: Array[Vector2i]} for the nearest hero this creature can
+## reach, or {} if none is reachable within PATH_BUDGET. Heroes are tried nearest
+## first (by grid distance), so usually only one search runs.
+func _find_chase(m: Dictionary) -> Dictionary:
+	var from: Vector2i = m["pos"]
+	var heroes := living_players()
+	heroes.sort_custom(func(a, b):
+		var da := _manhattan(from, players[a]["pos"])
+		var db := _manhattan(from, players[b]["pos"])
+		return da < db if da != db else player_order.find(a) < player_order.find(b))
+	for hid in heroes:
+		var goal: Vector2i = players[hid]["pos"]
+		if _manhattan(from, goal) == 1:
+			return {"target": hid, "path": [goal]}
+		var path := Pathfinder.find_path(from, goal, _monster_can_enter, PATH_BUDGET)
+		if not path.is_empty():
+			return {"target": hid, "path": path}
+	return {}
+
+
+func _monster_can_enter(p: Vector2i) -> bool:
+	return dungeon.is_open_floor(p) and monster_at(p).is_empty() and player_at(p).is_empty()
 
 
 func _check_combat_over() -> bool:
@@ -412,17 +562,134 @@ func _check_combat_over() -> bool:
 	if not _any_monster_awake():
 		mode = "explore"
 		initiative.clear()
+		_init_order.clear()
 		add_log("combat", "The fight is over.")
+		_recover_stable_heroes()
 		gm_event.emit({"kind": "combat_over", "text": "The party won the fight.", "actor": living_players()[0] if not living_players().is_empty() else "", "chain": 0})
 		return true
 	return false
 
 
 func _any_monster_awake() -> bool:
-	for id in monsters:
-		if monsters[id]["awake"]:
-			return true
-	return false
+	return not _awake_ids.is_empty()
+
+
+func _sorted_awake_ids() -> Array:
+	var ids: Array = _awake_ids.keys()
+	ids.sort_custom(func(a, b): return _actor_rank(a) < _actor_rank(b))
+	return ids
+
+
+# --- awareness: who notices whom ---------------------------------------------------
+
+## Wakes sleeping creatures that a conscious hero can now see: in the same room, or
+## within SIGHT_TILES with line of sight. Only tiles near heroes are checked, so the
+## cost does not grow with the number of creatures in the dungeon.
+## Starts a fight if anything is awake while exploring.
+func _update_awareness() -> void:
+	for hid in living_players():
+		var hp: Vector2i = players[hid]["pos"]
+		var hroom := dungeon.room_at(hp)
+		for x in range(hp.x - SIGHT_TILES, hp.x + SIGHT_TILES + 1):
+			for y in range(hp.y - SIGHT_TILES, hp.y + SIGHT_TILES + 1):
+				var p := Vector2i(x, y)
+				var mid := str(_monster_at_tile.get(p, ""))
+				if mid.is_empty() or _awake_ids.has(mid):
+					continue
+				var same_room := hroom >= 0 and int(monsters[mid]["room"]) == hroom
+				if same_room or (_manhattan(hp, p) <= SIGHT_TILES and dungeon.has_line_of_sight(hp, p)):
+					_wake(mid, "notices %s" % players[hid]["name"])
+	if mode == "explore" and _any_monster_awake() and not game_over:
+		_start_combat()
+
+
+func _wake(id: String, why: String) -> void:
+	if _awake_ids.has(id):
+		return
+	var m: Dictionary = monsters[id]
+	m["awake"] = true
+	m["lost_turns"] = 0
+	_awake_ids[id] = true
+	add_log("combat", "The %s %s!" % [m["name"], why])
+	if mode == "combat":
+		_join_initiative(id)
+
+
+func _sleep(id: String) -> void:
+	monsters[id]["awake"] = false
+	_awake_ids.erase(id)
+
+
+# --- dying, death saves and stabilizing (SRD 5.2.1) ---------------------------------
+
+## At the start of a dying hero's turn: d20, no modifiers. 10+ is a success, 9 or
+## lower a failure, a natural 1 counts as two failures, a natural 20 brings the hero
+## back with 1 HP. Three successes: stable. Three failures: dead.
+func _death_save(hero: Dictionary) -> void:
+	var n := int(dice.d20()["natural"])
+	if n == 20:
+		_revive(hero, 1)
+		add_log("roll", "%s rolls a death saving throw: natural 20! They regain consciousness with 1 HP." % hero["name"])
+		return
+	if n == 1:
+		hero["death_failures"] = int(hero["death_failures"]) + 2
+	elif n >= 10:
+		hero["death_successes"] = int(hero["death_successes"]) + 1
+	else:
+		hero["death_failures"] = int(hero["death_failures"]) + 1
+	add_log("roll", "%s rolls a death saving throw: %d (%s). Successes %d, failures %d." % [
+		hero["name"], n, "success" if n >= 10 else "failure", mini(hero["death_successes"], 3), mini(hero["death_failures"], 3)])
+	if int(hero["death_failures"]) >= 3:
+		hero["dead"] = true
+		add_log("combat", "%s dies." % hero["name"])
+	elif int(hero["death_successes"]) >= 3:
+		hero["stable"] = true
+		add_log("combat", "%s is stable, but unconscious." % hero["name"])
+
+
+func _dying_ally_at(p: Vector2i) -> String:
+	for id in player_order:
+		if players[id]["pos"] == p and is_dying(players[id]):
+			return id
+	return ""
+
+
+## Walking into a dying ally: a DC 10 Wisdom (Medicine) check to stabilize them.
+## Uses the hero's action in combat; outside combat it can be retried.
+func _try_stabilize(hero: Dictionary, ally: Dictionary) -> void:
+	if mode == "combat":
+		if not hero["has_action"]:
+			add_log("system", "%s has already used their action this turn." % hero["name"])
+			return
+		hero["has_action"] = false
+	var mod := Rules.ability_modifier(int(hero["abilities"]["wis"]))
+	var r := Rules.ability_check(dice, mod, STABILIZE_DC)
+	add_log("roll", "%s tends to %s: Wisdom (Medicine) check, rolled %d%+d = %d vs DC %d, %s." % [
+		hero["name"], ally["name"], r["natural"], mod, r["total"], STABILIZE_DC, "SUCCESS" if r["success"] else "FAILURE"])
+	if r["success"]:
+		ally["stable"] = true
+		add_log("combat", "%s is stable." % ally["name"])
+		if mode == "explore":
+			_recover_stable_heroes()
+	if mode == "combat":
+		_maybe_auto_end(hero)
+
+
+## Simplification until rests exist: a stable hero wakes with 1 HP once no fight is
+## going on (the rules say after 1d4 hours; there is no clock to wait on yet).
+func _recover_stable_heroes() -> void:
+	for id in player_order:
+		var h: Dictionary = players[id]
+		if int(h["hp"]) <= 0 and h.get("stable", false) and not h.get("dead", false):
+			_revive(h, 1)
+			add_log("system", "%s comes to with 1 HP." % h["name"])
+
+
+func _revive(hero: Dictionary, hp: int) -> void:
+	hero["hp"] = clampi(hp, 1, int(hero["max_hp"]))
+	hero["death_successes"] = 0
+	hero["death_failures"] = 0
+	hero["stable"] = false
 
 
 # --- room contents ---------------------------------------------------------------
@@ -439,15 +706,17 @@ func _populate_room(room: Dictionary) -> void:
 			var key: String = options[rng.randi() % options.size()]
 			var count := rng.randi_range(1, clampi(1 + (depth >> 1), 1, 4))
 			for i in count:
-				_spawn_monster(key, room, rng)
+				_spawn_monster(key, room, rng, false)   # asleep until a hero sees it
 	if rng.randf() < 0.3:
 		_place_item(FLAVOR_ITEMS[rng.randi() % FLAVOR_ITEMS.size()], room, rng)
 
 
-func _spawn_monster(key: String, room: Dictionary, rng: RandomNumberGenerator) -> bool:
+## Places a creature in a room. `awake` creatures join (or start) the fight at once;
+## sleeping ones wait until a hero sees them (_update_awareness).
+func _spawn_monster(key: String, room: Dictionary, rng: RandomNumberGenerator, awake: bool) -> bool:
 	var spec: Dictionary = monster_table[key]
 	var p := _random_free_tile(room, rng)
-	if p == Vector2i(-99999, -99999):
+	if p == NO_TILE:
 		return false
 	var id := "m%d" % _next_id
 	_next_id += 1
@@ -455,16 +724,29 @@ func _spawn_monster(key: String, room: Dictionary, rng: RandomNumberGenerator) -
 	monsters[id] = {
 		"id": id, "key": key, "name": spec["name"], "pos": p, "hp": hp, "max_hp": hp,
 		"ac": spec["ac"], "attack_bonus": spec["attack_bonus"], "damage": spec["damage"],
-		"speed": spec["speed"], "dex": spec["dex"], "awake": true, "room": room["id"],
+		"speed": spec["speed"], "dex": spec["dex"], "awake": false, "room": room["id"], "lost_turns": 0,
 	}
-	if mode == "combat":
-		initiative.append(id)
+	_monster_at_tile[p] = id
+	if awake:
+		monsters[id]["awake"] = true
+		_awake_ids[id] = true
+		if mode == "combat":
+			_join_initiative(id)
 	return true
+
+
+func _remove_monster(id: String) -> void:
+	var m: Dictionary = monsters[id]
+	if _monster_at_tile.get(m["pos"]) == id:
+		_monster_at_tile.erase(m["pos"])
+	_awake_ids.erase(id)
+	monsters.erase(id)
+	_remove_from_initiative(id)
 
 
 func _place_item(item_name: String, room: Dictionary, rng: RandomNumberGenerator) -> void:
 	var p := _random_free_tile(room, rng)
-	if p != Vector2i(-99999, -99999):
+	if p != NO_TILE:
 		items.append({"id": "i%d" % _next_id, "name": item_name, "pos": p})
 		_next_id += 1
 
@@ -486,6 +768,9 @@ func _apply_gm_action(a: Dictionary, event: Dictionary) -> void:
 		actor_id = alive[0]
 	var hero: Dictionary = players[actor_id]
 	var chain := int(event.get("chain", 0))
+	# Per-game counter, not log_seq: log_seq keeps counting across games (clients
+	# rely on that), so seeding from it would make GM placements differ on replay.
+	_gm_actions += 1
 	match str(a.get("type", "none")):
 		"ability_check":
 			var ab := str(a.get("ability", ""))
@@ -507,10 +792,10 @@ func _apply_gm_action(a: Dictionary, event: Dictionary) -> void:
 				return
 			var count := clampi(int(a.get("count", 1)), 1, MAX_GM_SPAWNS_PER_ROOM)
 			count = mini(count, MAX_GM_SPAWNS_PER_ROOM - int(_gm_spawned.get(rid, 0)))
-			var rng := dungeon.rng_for("gm-spawn:%d:%d" % [rid, log_seq])
+			var rng := dungeon.rng_for("gm-spawn:%d:%d" % [rid, _gm_actions])
 			var spawned := 0
 			for i in count:
-				if _spawn_monster(key, dungeon.rooms[rid], rng):
+				if _spawn_monster(key, dungeon.rooms[rid], rng, true):   # an alarm: they come ready
 					spawned += 1
 			_gm_spawned[rid] = int(_gm_spawned.get(rid, 0)) + spawned
 			if spawned > 0 and mode == "explore":
@@ -520,7 +805,7 @@ func _apply_gm_action(a: Dictionary, event: Dictionary) -> void:
 			var rid := dungeon.room_at(hero["pos"])
 			if item_name.is_empty() or rid < 0:
 				return
-			_place_item(item_name, dungeon.rooms[rid], dungeon.rng_for("gm-item:%d:%d" % [rid, log_seq]))
+			_place_item(item_name, dungeon.rooms[rid], dungeon.rng_for("gm-item:%d:%d" % [rid, _gm_actions]))
 
 
 # --- helpers ---------------------------------------------------------------------
@@ -563,17 +848,6 @@ func _actor_name(id: String) -> String:
 	return id
 
 
-func _nearest_living_player(from: Vector2i) -> String:
-	var best := ""
-	var best_d := 1 << 30
-	for id in living_players():
-		var d := _manhattan(from, players[id]["pos"])
-		if d < best_d:
-			best = id
-			best_d = d
-	return best
-
-
 func _manhattan(a: Vector2i, b: Vector2i) -> int:
 	return absi(a.x - b.x) + absi(a.y - b.y)
 
@@ -592,7 +866,7 @@ func _random_free_tile(room: Dictionary, rng: RandomNumberGenerator) -> Vector2i
 		var p: Vector2i = cells[rng.randi() % cells.size()]
 		if _manhattan(p, entry) > 1 and monster_at(p).is_empty() and player_at(p).is_empty():
 			return p
-	return Vector2i(-99999, -99999)
+	return NO_TILE
 
 
 func _free_tile_near(center: Vector2i) -> Vector2i:
