@@ -139,6 +139,24 @@ func open_door(p: Vector2i) -> Dictionary:
 	return {}
 
 
+## SHA-256 of every tile, in a fixed order: two maps with the same hash are identical.
+func map_hash() -> String:
+	var keys: Array = tiles.keys()
+	keys.sort()
+	var buf := PackedInt32Array()
+	buf.resize(keys.size() * 3)
+	var i := 0
+	for p in keys:
+		buf[i] = p.x
+		buf[i + 1] = p.y
+		buf[i + 2] = int(tiles[p])
+		i += 3
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(buf.to_byte_array())
+	return ctx.finish().hex_encode()
+
+
 func to_dict() -> Dictionary:
 	return {"seed": world_seed, "tiles": tiles, "revealed": revealed, "rooms": rooms, "doors": doors}
 

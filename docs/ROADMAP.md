@@ -25,7 +25,8 @@ Each milestone ends with something playable. Tick items as they land.
 - [x] Replay test: same seed + same inputs = identical game, with state invariants checked every step
 - [ ] Ranged attacks with line of sight; opportunity attacks
 - [ ] Short and long rests; Hit Dice
-- [ ] Save / load (seed + opened doors + entities + log + GM summary)
+- [x] Save / load: versioned, map rebuilt from seed + doors and hash-checked, safe binary format, atomic writes ([SAVES.md](SAVES.md))
+- [x] Replay files: record every input, verify or watch from the command line, F12 for bug reports
 - [ ] Rolling "story so far" summary and world memory for the GM
 - [ ] Settings screen: provider, model, effort, local URL; privacy note
 - [ ] Verified SRD 5.2.1 stat blocks for ~20 low-CR monsters

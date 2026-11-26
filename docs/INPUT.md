@@ -16,6 +16,8 @@ Defaults live in `game/data/input/bindings.json`.
 | `talk` (open the text box to the GM) | Enter | Y |
 | `cancel` (leave the text box) | Escape | B |
 | `restart` (new delve after a loss) | R | Start |
+| `quick_save` / `quick_load` | F5 / F9 | |
+| `save_replay` (for bug reports, see [SAVES.md](SAVES.md)) | F12 | |
 
 Letters are bound by **physical position**, so WASD stays where it is on AZERTY or Dvorak keyboards.
 

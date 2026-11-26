@@ -9,6 +9,9 @@
     "switch_hero": {"label": "Switch hero",      "bind": ["key:Tab", "joy_button:x"]},
     "talk":        {"label": "Talk to the GM",   "bind": ["key:Enter", "key:Kp Enter", "joy_button:y"]},
     "cancel":      {"label": "Leave text box",   "bind": ["key:Escape", "joy_button:b"]},
-    "restart":     {"label": "New delve (after a loss)", "bind": ["key:R", "joy_button:start"]}
+    "restart":     {"label": "New delve (after a loss)", "bind": ["key:R", "joy_button:start"]},
+    "quick_save":  {"label": "Quick save",       "bind": ["key:F5"]},
+    "quick_load":  {"label": "Quick load",       "bind": ["key:F9"]},
+    "save_replay": {"label": "Save a replay (for bug reports)", "bind": ["key:F12"]}
   }
 }

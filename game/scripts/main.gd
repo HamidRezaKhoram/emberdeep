@@ -23,6 +23,7 @@ var provider_option: OptionButton
 var ip_edit: LineEdit
 var lan_list: ItemList
 var menu_status: Label
+var continue_button: Button
 
 # HUD widgets
 var hud: Control
@@ -58,8 +59,12 @@ func _ready() -> void:
 	Net.lan_game_found.connect(_on_lan_found)
 	Net.joined.connect(_show_game)
 	Net.start_discovery()
-	if "--smoke" in OS.get_cmdline_user_args():
+	var args := OS.get_cmdline_user_args()
+	if "--smoke" in args:
 		_run_smoke.call_deferred()
+	for a in args:
+		if a.begins_with("--replay="):
+			_run_replay.call_deferred(a.trim_prefix("--replay="), "--watch" in args)
 
 
 # --- menu ------------------------------------------------------------------------
@@ -92,6 +97,11 @@ func _build_menu(ui: CanvasLayer) -> void:
 	provider_option.add_item("Claude API (needs ANTHROPIC_API_KEY)")
 	provider_option.select(maxi(0, PROVIDERS.find(str(cfg.get_value("gm", "provider")))))
 
+	continue_button = Button.new()
+	continue_button.text = "Continue (quick save)"
+	continue_button.pressed.connect(_continue)
+	continue_button.visible = SaveGame.exists(SaveGame.QUICK)
+	box.add_child(continue_button)
 	_button(box, "Play on this computer", _start_local)
 	_button(box, "Host a LAN game", _host_lan)
 	box.add_child(HSeparator.new())
@@ -139,6 +149,29 @@ func _start_local() -> void:
 	_start_gm()
 	GameState.new_game(seed_edit.text.to_int(), names, 1)
 	_show_game()
+
+
+func _continue() -> void:
+	_save_menu_choices()
+	_start_gm()
+	if _load_quicksave():
+		_show_game()
+
+
+## Loads the quick save into a local game. Returns false (and says why) on failure.
+func _load_quicksave() -> bool:
+	var r := SaveGame.load_slot(SaveGame.QUICK)
+	if r["error"] != "":
+		if in_game:
+			GameState.add_log("system", "Could not load: " + str(r["error"]))
+		else:
+			menu_status.text = "Could not load the quick save: " + str(r["error"])
+		return false
+	if gm:
+		gm.history = r["extra"].get("gm_history", [])
+	_show_game()
+	GameState.add_log("system", "Loaded.")
+	return true
 
 
 func _host_lan() -> void:
@@ -277,6 +310,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		input_line.grab_focus.call_deferred()   # deferred: the same key must not also submit the box
 	elif event.is_action_pressed("restart") and GameState.game_over and not Net.is_online():
 		_start_local()
+	elif event.is_action_pressed("quick_save") and Net.is_authority():
+		var err := SaveGame.write(SaveGame.QUICK, {"gm_history": gm.history if gm else []})
+		GameState.add_log("system", "Saved." if err.is_empty() else "Could not save: " + err)
+	elif event.is_action_pressed("quick_load") and not Net.is_online():
+		_load_quicksave()
+	elif event.is_action_pressed("save_replay") and Net.is_authority():
+		var path := Replay.save()
+		GameState.add_log("system", "Replay saved to %s" % ProjectSettings.globalize_path(path) if path != "" else "Nothing to save as a replay.")
 	else:
 		return
 	get_viewport().set_input_as_handled()
@@ -359,6 +400,33 @@ func _on_log(entry: Dictionary) -> void:
 		_: log_label.append_text("[color=#a9a3b3]%s[/color]\n" % text)
 
 
+# --- replays ----------------------------------------------------------------------
+
+## `-- --replay=<file>`: re-runs a recorded game and checks it reproduces (exit 0/1).
+## With `--watch`, plays it in the window at reading speed instead.
+func _run_replay(path: String, watch: bool) -> void:
+	var rec := Replay.read(path)
+	if rec.is_empty():
+		print("REPLAY error=could not read %s" % path)
+		get_tree().quit(2)
+		return
+	if not watch:
+		var r := Replay.run(rec)
+		print("REPLAY error=%s inputs=%d matches=%s data_changed=%s hash=%s" % [r["error"], r["inputs"], r["matches"], r["data_changed"], r["hash"]])
+		get_tree().quit(0 if r["error"] == "" and r["matches"] else 1)
+		return
+	var err := Replay.begin(rec)
+	if err != "":
+		print("REPLAY error=%s" % err)
+		get_tree().quit(2)
+		return
+	_show_game()
+	for op in rec["inputs"]:
+		Replay.step(op)
+		await get_tree().create_timer(0.12).timeout
+	print("REPLAY watched inputs=%d matches=%s" % [rec["inputs"].size(), GameState.state_hash() == str(rec.get("final_hash", ""))])
+
+
 # --- dev smoke run -----------------------------------------------------------------
 
 ## `emberdeep.x86_64 -- --smoke [--shot=/path/to.png] [--steps=N]`
@@ -368,8 +436,11 @@ func _on_log(entry: Dictionary) -> void:
 func _run_smoke() -> void:
 	var shot := "user://smoke.png"
 	var steps := 400
+	var record := ""
 	for a in OS.get_cmdline_user_args():
-		if a.begins_with("--shot="):
+		if a.begins_with("--record="):
+			record = a.trim_prefix("--record=")
+		elif a.begins_with("--shot="):
 			shot = a.trim_prefix("--shot=")
 		elif a.begins_with("--steps="):
 			steps = a.trim_prefix("--steps=").to_int()
@@ -387,6 +458,8 @@ func _run_smoke() -> void:
 		await get_tree().process_frame
 	await get_tree().create_timer(0.5).timeout
 	get_viewport().get_texture().get_image().save_png(shot)
+	if record != "":
+		print("SMOKE replay=%s" % Replay.save(record))
 	var hp: Array = []
 	for id in GameState.player_order:
 		hp.append("%s %d/%d" % [GameState.players[id]["name"], GameState.players[id]["hp"], GameState.players[id]["max_hp"]])

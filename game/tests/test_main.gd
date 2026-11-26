@@ -32,6 +32,9 @@ func _ready() -> void:
 	_test_event_stream_complete()
 	_test_presenter_playback()
 	_test_sound_mapping()
+	_test_save_roundtrip()
+	_test_save_files_and_versions()
+	_test_replay_files()
 	print("\n%d passed, %d failed" % [passes, failures])
 	get_tree().quit(1 if failures > 0 else 0)
 
@@ -605,20 +608,8 @@ func _invariant_error() -> String:
 	return ""
 
 
-## Hash of everything that defines the game. map_version and log sequence numbers
-## are left out on purpose: they count up across games so network clients can tell
-## new data from old, so they differ between two runs of the same game.
 func _state_hash() -> String:
-	var snap := GameState.to_snapshot(true)
-	snap.erase("map_version")
-	var texts: Array = []
-	for e in GameState.log_entries:
-		texts.append([e["kind"], e["text"]])
-	snap["log"] = texts
-	var ctx := HashingContext.new()
-	ctx.start(HashingContext.HASH_SHA256)
-	ctx.update(var_to_bytes([snap, GameState.dice.rng.state]))
-	return ctx.finish().hex_encode()
+	return GameState.state_hash()
 
 
 # --- data files ----------------------------------------------------------------------
@@ -790,3 +781,94 @@ func _test_sound_mapping() -> void:
 	check(AudioDirector.sound_for({"type": "moved"}, false).is_empty(), "monsters' steps are silent")
 	check(AudioDirector.sound_for({"type": "moved"}, true) == ["step"], "heroes' steps")
 	check(AudioDirector.sound_for({"type": "death_save", "success": false}, true) == ["death_save_fail"], "death save sounds")
+
+
+# --- saves and replays ----------------------------------------------------------------
+
+## Continue a bot game for `steps` more inputs from the current state.
+func _bot_continue(steps: int) -> void:
+	for i in steps:
+		if GameState.game_over:
+			return
+		var id := _bot_actor()
+		if id.is_empty():
+			return
+		var d := _bot_step(id)
+		if d == Vector2i.ZERO:
+			if GameState.mode != "combat":
+				return
+			GameState.handle_intent(1, {"type": "end_turn", "actor": id})
+		else:
+			GameState.handle_intent(1, {"type": "move", "dir": d, "actor": id})
+
+
+func _test_save_roundtrip() -> void:
+	for s in [3, 4242]:
+		_bot_game(s, 120)
+		var saved := GameState.to_save().duplicate(true)
+		var at_save := GameState.state_hash()
+		_bot_continue(150)
+		var straight := GameState.state_hash()
+		GameState.new_game(999, ["Zed"], 1)   # wipe
+		var err := GameState.load_save(saved)
+		check(err.is_empty(), "seed %d: save loads (%s)" % [s, err])
+		check(GameState.state_hash() == at_save, "seed %d: loaded state is identical to the saved one" % s)
+		check(_invariant_error().is_empty(), "seed %d: loaded state passes the invariants (%s)" % [s, _invariant_error()])
+		_bot_continue(150)
+		check(GameState.state_hash() == straight, "seed %d: playing on from the save gives the same game as never stopping" % s)
+
+
+func _test_save_files_and_versions() -> void:
+	_bot_game(17, 80)
+	var slot := "test_roundtrip"
+	check(SaveGame.write(slot, {"gm_history": [{"role": "user", "content": "hi"}]}).is_empty(), "save file written")
+	var h := GameState.state_hash()
+	GameState.new_game(1, ["X"], 1)
+	var r := SaveGame.load_slot(slot)
+	check(r["error"] == "" and GameState.state_hash() == h, "save file loads back identically (%s)" % r["error"])
+	check(r["extra"].get("gm_history", []).size() == 1, "extra data (GM history) survives")
+	DirAccess.remove_absolute(SaveGame.path_for(slot))
+	var good: Dictionary = {"format": SaveGame.FORMAT, "generator_version": GameData.dungeon.generator_version,
+		"data_fingerprint": GameData.fingerprint, "state": GameState.to_save()}
+	check(SaveGame.check(good)["error"] == "", "a current save passes the checks")
+	var newer := good.duplicate(true)
+	newer["format"] = SaveGame.FORMAT + 1
+	check("newer version" in SaveGame.check(newer)["error"], "a save from a newer game is refused")
+	var other_gen := good.duplicate(true)
+	other_gen["generator_version"] = 999
+	check("generator" in SaveGame.check(other_gen)["error"], "a save from other dungeon rules is refused")
+	var tweaked := good.duplicate(true)
+	tweaked["data_fingerprint"] = "different"
+	var tw := SaveGame.check(tweaked)
+	check(tw["error"] == "" and tw["warnings"].size() == 1, "changed balance data loads with a warning")
+	check(SaveGame.check("garbage")["error"] != "", "garbage is refused")
+	var broken := good.duplicate(true)
+	broken["state"]["players"] = 5
+	check("damaged" in SaveGame.check(broken)["error"], "a damaged field is refused")
+	var wrong_map := GameState.to_save()
+	wrong_map["map_hash"] = "0000"
+	var before := GameState.state_hash()
+	check("map" in GameState.load_save(wrong_map), "a map that doesn't rebuild is refused")
+	check(GameState.state_hash() == before, "a refused load changes nothing")
+
+
+func _test_replay_files() -> void:
+	_bot_game(90001, 200)
+	var final := GameState.state_hash()
+	var path := "user://test.replay"
+	check(Replay.save(path) == path, "replay written")
+	GameState.new_game(5, ["Q"], 1)
+	var r := Replay.run(Replay.read(path))
+	check(r["error"] == "" and r["matches"] and r["hash"] == final, "replay file reproduces the game (%s)" % r["error"])
+	check(int(r["inputs"]) > 50, "the replay holds the inputs (%d)" % r["inputs"])
+	# a replay can start from a save, and GM replies are part of it
+	var hid: String = GameState.player_order[0]
+	GameState.load_save(GameState.to_save())
+	GameState.apply_gm_response({"narration": "A rat!", "actions": [{"type": "spawn_monster", "ability": "", "dc": 0, "monster": "giant_rat", "count": 2, "item": "", "reason": ""}]}, {"kind": "player_action", "text": "", "actor": hid, "chain": 0})
+	_bot_continue(60)
+	var final2 := GameState.state_hash()
+	Replay.save(path)
+	GameState.new_game(6, ["R"], 1)
+	var r2 := Replay.run(Replay.read(path))
+	check(r2["error"] == "" and r2["hash"] == final2, "a replay that starts from a save, with a GM reply, reproduces (%s)" % r2["error"])
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))

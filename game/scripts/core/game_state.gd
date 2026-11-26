@@ -45,6 +45,10 @@ var _gm_actions: int = 0             # GM actions applied this game; seeds GM pl
 var _monster_at_tile: Dictionary = {}  # Vector2i -> monster id
 var _awake_ids: Dictionary = {}        # monster id -> true
 var _init_order: Dictionary = {}       # actor id -> [initiative total, dex score], combat only
+## Everything needed to replay this game exactly: how it started, then every input to
+## the rules in order ({start, inputs}). See Replay and docs/SAVES.md.
+var recording: Dictionary = {}
+var _record_paused := false
 
 
 func _ready() -> void:
@@ -76,10 +80,16 @@ func new_game(seed_value: int, hero_names: Array, owner_peer: int = 1) -> void:
 	round_num = 0
 	game_over = false
 	_next_id = 1
+	var names: Array = []
+	for n in hero_names:
+		names.append(str(n))
+	_start_recording({"kind": "new", "seed": world_seed, "heroes": names, "owner": owner_peer})
 	var start := dungeon.create_start_room()
 	map_version += 1
-	for n in hero_names:
-		add_player(str(n), owner_peer)
+	_record_paused = true   # these joins are part of "new", not separate inputs
+	for n in names:
+		add_player(n, owner_peer)
+	_record_paused = false
 	add_log("system", "A new delve begins (seed %d). Arrow keys or WASD to move, Enter to speak to the GM." % world_seed)
 	if not player_order.is_empty():
 		gm_event.emit({"kind": "room_revealed", "text": _describe_room(start), "actor": player_order[0], "chain": 0})
@@ -87,6 +97,7 @@ func new_game(seed_value: int, hero_names: Array, owner_peer: int = 1) -> void:
 
 
 func add_player(hero_name: String, owner_peer: int) -> String:
+	_record(["join", hero_name, owner_peer])
 	var id := "h%d" % _next_id
 	_next_id += 1
 	var cls := GameData.hero_class(GameData.default_class)
@@ -114,6 +125,7 @@ func add_player(hero_name: String, owner_peer: int) -> String:
 
 
 func remove_players_of(owner_peer: int) -> void:
+	_record(["leave", owner_peer])
 	for id in player_order.duplicate():
 		if int(players[id]["owner"]) == owner_peer:
 			add_log("system", "%s leaves the party." % players[id]["name"])
@@ -128,6 +140,7 @@ func remove_players_of(owner_peer: int) -> void:
 ## The only entry point for player input. `sender` is the network peer that sent
 ## it (1 = the host / a local game); a peer may only act for heroes it owns.
 func handle_intent(sender: int, intent: Dictionary) -> void:
+	_record(["intent", sender, intent.duplicate(true)])
 	var actor_id := str(intent.get("actor", ""))
 	if not players.has(actor_id):
 		return
@@ -197,6 +210,7 @@ func move_monster(id: String, p: Vector2i) -> void:
 ## Applies one structured GM reply ({narration, actions[]}). Everything is validated
 ## here: unknown monsters, out-of-range DCs and over-budget spawns are dropped.
 func apply_gm_response(data: Dictionary, event: Dictionary) -> void:
+	_record(["gm", data.duplicate(true), event.duplicate(true)])
 	var narration := str(data.get("narration", "")).strip_edges()
 	if not narration.is_empty():
 		add_log("gm", narration.left(1500))
@@ -278,6 +292,99 @@ func apply_snapshot(s: Dictionary) -> void:
 			log_entries.append(e)
 			log_added.emit(e)
 	changed.emit()
+
+
+# --- saves, replays and state hashing ------------------------------------------------
+
+## SHA-256 of everything that defines the game. map_version and log/event sequence
+## numbers are left out on purpose: they keep counting across games so network
+## clients can tell new data from old, so they differ between two runs of one game.
+func state_hash() -> String:
+	var snap := to_snapshot(true)
+	snap.erase("map_version")
+	var texts: Array = []
+	for e in log_entries:
+		texts.append([e["kind"], e["text"]])
+	snap["log"] = texts
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(var_to_bytes([snap, dice.rng.state, _next_id, _gm_actions, _gm_spawned, _init_order]))
+	return ctx.finish().hex_encode()
+
+
+## Everything a save needs. The map is not stored: it is rebuilt from the seed and the
+## doors opened, in order, and checked against map_hash.
+func to_save() -> Dictionary:
+	return {
+		"seed": world_seed, "opened_doors": dungeon.opened_doors.duplicate(), "map_hash": dungeon.map_hash(),
+		"players": players.duplicate(true), "player_order": player_order.duplicate(),
+		"monsters": monsters.duplicate(true), "items": items.duplicate(true),
+		"mode": mode, "initiative": initiative.duplicate(), "turn_index": turn_index, "round": round_num,
+		"game_over": game_over, "log": log_entries.duplicate(true), "next_id": _next_id,
+		"gm_spawned": _gm_spawned.duplicate(), "gm_actions": _gm_actions, "init_order": _init_order.duplicate(true),
+		"dice_state": dice.rng.state,
+	}
+
+
+const _SAVE_KEYS := ["seed", "opened_doors", "map_hash", "players", "player_order", "monsters", "items", "mode",
+	"initiative", "turn_index", "round", "game_over", "log", "next_id", "gm_spawned", "gm_actions", "init_order", "dice_state"]
+
+
+## Restores a game from to_save() output. Returns "" or what is wrong (then nothing
+## is changed). Heroes all become owned by `owner_peer` (saves are loaded locally).
+func load_save(d: Dictionary, owner_peer: int = 1) -> String:
+	for k in _SAVE_KEYS:
+		if not d.has(k):
+			return "save is missing '%s'" % k
+	var gen := DungeonGenerator.new(int(d["seed"]))
+	gen.create_start_room()
+	for p in d["opened_doors"]:
+		gen.open_door(p)
+	if gen.map_hash() != str(d["map_hash"]):
+		return "the map rebuilt from this save doesn't match (the dungeon rules changed since it was made)"
+	world_seed = int(d["seed"])
+	dungeon = gen
+	map_version += 1
+	players = d["players"].duplicate(true)
+	for id in players:
+		players[id]["owner"] = owner_peer
+	player_order = d["player_order"].duplicate()
+	monsters = d["monsters"].duplicate(true)
+	items = d["items"].duplicate(true)
+	mode = str(d["mode"])
+	initiative = d["initiative"].duplicate()
+	turn_index = int(d["turn_index"])
+	round_num = int(d["round"])
+	game_over = bool(d["game_over"])
+	log_entries = d["log"].duplicate(true)
+	for e in log_entries:
+		log_seq += 1
+		e["seq"] = log_seq   # renumbered: sequence numbers only ever grow
+	_next_id = int(d["next_id"])
+	_gm_spawned = d["gm_spawned"].duplicate()
+	_gm_actions = int(d["gm_actions"])
+	_init_order = d["init_order"].duplicate(true)
+	dice = Dice.new(world_seed)
+	dice.rng.state = int(d["dice_state"])
+	_rebuild_indexes()
+	recent_events.clear()
+	_emit("reset", {})
+	_start_recording({"kind": "save", "save": d.duplicate(true)})
+	for e in log_entries:
+		log_added.emit(e)
+	changed.emit()
+	return ""
+
+
+func _start_recording(start: Dictionary) -> void:
+	start["generator_version"] = GameData.dungeon.generator_version
+	start["data_fingerprint"] = GameData.fingerprint
+	recording = {"start": start, "inputs": []}
+
+
+func _record(op: Array) -> void:
+	if not _record_paused and not recording.is_empty():
+		recording["inputs"].append(op)
 
 
 func _rebuild_indexes() -> void:

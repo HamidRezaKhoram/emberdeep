@@ -22,9 +22,6 @@
 
 1. **One source of truth.** `GameState` (autoload) on the host. Clients never change it;
    they send intents and render snapshots.
-2b. **Rules resolve, the view replays.** `GameState` resolves every action instantly and emits
-   ordered events; the `Presenter` decides when the player *sees* them. Rules never wait on
-   animation, and animation can't change the rules ([EVENTS.md](EVENTS.md)).
 2. **Everything is an intent.** Local keyboard, hot-seat, LAN peers all go through
    `Net.send_intent()` → `GameState.handle_intent(sender, intent)`. The sender's peer id must
    own the hero. This is why single-player and multiplayer share one code path.
@@ -34,6 +31,9 @@
    (seed, door position). Tests rely on this; so will saves and replays.
 5. **Data over code.** Every rules number, monster, class, item and prompt is a file in `game/data/`,
    loaded and validated by `GameData` ([DATA.md](DATA.md)). Code holds no balance constants.
+6. **Rules resolve, the view replays.** `GameState` resolves every action instantly and emits
+   ordered events; the `Presenter` decides when the player *sees* them. Rules never wait on
+   animation, and animation can't change the rules ([EVENTS.md](EVENTS.md)).
 
 ## Files
 
@@ -43,6 +43,8 @@
 | `game/scripts/core/game_data.gd` | `GameData`: loads and validates every file in `game/data/` into typed rules (balance, dungeon, classes, monsters, items); data fingerprint. See [DATA.md](DATA.md). |
 | `game/scripts/core/dice.gd` | `Dice`: seeded roller, `NdM+K` parser, d20 with advantage. |
 | `game/scripts/core/rules.gd` | `Rules`: SRD math (modifiers, checks, attacks, damage). Pure functions. |
+| `game/scripts/core/save_game.gd` | `SaveGame`: versioned save files, checks, migrations. See [SAVES.md](SAVES.md). |
+| `game/scripts/core/replay.gd` | `Replay`: write, read, run and verify recordings of every input. |
 | `game/scripts/core/settings.gd` | `Settings`: `user://settings.cfg`, API key from env. |
 | `game/scripts/world/dungeon_generator.gd` | `DungeonGenerator`: door-driven room accretion, fog of war, line of sight, O(1) `room_at()` through a tile → room index. |
 | `game/scripts/world/pathfinder.gd` | `Pathfinder`: A* on the tile grid with a cap on tiles expanded, so cost doesn't grow with the map. Deterministic tie-breaking. |
@@ -92,4 +94,3 @@ GM event: `{kind: "room_revealed"|"player_action"|"check_result"|"combat_over", 
 - Snapshots send the whole state; the map only when it changed. Switch to deltas when rooms number in the hundreds.
 - UI is built in code. Move to scenes and a Theme once the layout settles.
 - The map view redraws every revealed tile on each change; move to `TileMapLayer` (chunked, cached).
-- No save/load yet. Plan: seed + `opened_doors` + heroes + monsters + log + GM summary, as JSON in `user://saves/`.
