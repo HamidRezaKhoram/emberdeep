@@ -8,10 +8,10 @@ friends over **LAN** (Steam lobbies planned). Built with **Godot 4.6** for a nat
 > Status: **skeleton (M0).** Everything below runs, but it is bare: colored squares for art,
 > one pregenerated Fighter, six monsters. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
-## Quick start (Linux)
+## Quick start (Linux, macOS)
 
 ```bash
-scripts/fetch-godot.sh            # downloads the pinned Godot 4.6.3 editor into .tools/
+scripts/fetch-godot.sh            # downloads the pinned Godot 4.6.3 editor into .tools/ (or set GODOT=/path/to/godot)
 scripts/run-tests.sh              # headless test suite
 .tools/godot --path game          # play from source
 scripts/smoke.sh                  # bot plays a seeded game in a window, saves build/smoke.png
