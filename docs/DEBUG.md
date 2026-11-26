@@ -13,7 +13,7 @@ unless `GameState.debug_enabled` is on.
 | F3 | Heal the whole party (also revives the dead) |
 | F4 | Remove every awake monster, ending the fight |
 | F7 | Slow motion (x0.25) for animations, to tune timing |
-| F8 | Reload `game/data/` and the key bindings without restarting |
+| F8 | Reload `game/data/`, the key bindings, art and sound without restarting ([ASSETS.md](ASSETS.md)) |
 | F12 | Save a replay (works in every build; see [SAVES.md](SAVES.md)) |
 
 ## Commands

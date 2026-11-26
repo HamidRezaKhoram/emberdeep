@@ -10,5 +10,7 @@
   "hero_step_ms": 2.0,
   "save_write_ms": 400.0,
   "save_load_ms": 800.0,
-  "snapshot_kb_no_map": 200.0
+  "snapshot_kb_no_map": 200.0,
+  "map_full_paint_ms": 1000.0,
+  "map_door_paint_ms": 2.0
 }

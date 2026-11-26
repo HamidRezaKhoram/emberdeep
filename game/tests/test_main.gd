@@ -32,6 +32,8 @@ func _ready() -> void:
 	_test_event_stream_complete()
 	_test_presenter_playback()
 	_test_sound_mapping()
+	_test_asset_library()
+	_test_map_tiles()
 	_test_save_roundtrip()
 	_test_save_files_and_versions()
 	_test_replay_files()
@@ -770,6 +772,129 @@ func _test_presenter_playback() -> void:
 	check(pr.floaters.is_empty() or pr.floaters[0]["text"] == "CRIT 9", "a crit shows its damage")
 	pr.push({"seq": 60, "type": "reset"})
 	check(pr.visual.is_empty() and not pr.busy(), "reset clears the view")
+
+
+const TEST_ART := "user://test_art/"
+
+
+func _write_png(path: String, size: Vector2i, color: Color) -> void:
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	var img := Image.create_empty(size.x, size.y, false, Image.FORMAT_RGBA8)
+	img.fill(color)
+	img.save_png(path)
+
+
+func _remove_tree(dir: String) -> void:
+	var da := DirAccess.open(dir)
+	if da == null:
+		return
+	for f in da.get_files():
+		da.remove(f)
+	for sub in da.get_directories():
+		_remove_tree(dir.path_join(sub))
+	DirAccess.remove_absolute(dir)
+
+
+func _test_asset_library() -> void:
+	_remove_tree(TEST_ART)
+	_write_png(TEST_ART + "tiles/floor.png", Vector2i(32, 32), Color.RED)
+	_write_png(TEST_ART + "tiles/floor_2.png", Vector2i(32, 32), Color.GREEN)
+	_write_png(TEST_ART + "tiles/floor_4.png", Vector2i(32, 32), Color.BLUE)   # after a gap: ignored
+	_write_png(TEST_ART + "tiles/wall.png", Vector2i(32, 32), Color.GRAY)
+	_write_png(TEST_ART + "regions/sewers/tiles/wall.png", Vector2i(32, 32), Color.DARK_GREEN)
+	var lib := AssetLibrary.new(TEST_ART, true)
+	var floors := lib.textures("tiles/floor")
+	check(floors.size() == 2, "variants stop at the first gap (got %d)" % floors.size())
+	check(floors.size() == 2 and (floors[0] as Texture2D).get_image().get_pixel(0, 0) == Color.RED, "base file is variant 1")
+	check(lib.textures("tiles/nothing_here").is_empty(), "a missing file gives no textures")
+	check(lib.textures("tiles/floor")[0] == floors[0], "lookups are cached")
+	var wall := lib.first_textures(["regions/sewers/tiles/wall", "tiles/wall"])
+	check(not wall.is_empty() and (wall[0] as Texture2D).get_image().get_pixel(0, 0) == Color.DARK_GREEN, "region art wins over the default")
+	wall = lib.first_textures(["regions/caverns/tiles/wall", "tiles/wall"])
+	check(not wall.is_empty() and (wall[0] as Texture2D).get_image().get_pixel(0, 0) == Color.GRAY, "regions without art use the default")
+	check(lib.sounds("sfx/step").is_empty(), "a missing sound is silence")
+	_write_png(TEST_ART + "tiles/floor_3.png", Vector2i(32, 32), Color.YELLOW)
+	check(lib.textures("tiles/floor").size() == 2, "cache holds until cleared")
+	lib.clear()
+	check(lib.textures("tiles/floor").size() == 4, "clear() picks up new files (floor_3 fills the gap)")
+	var exported := AssetLibrary.new(TEST_ART, false)
+	check(exported.textures("tiles/floor").is_empty(), "export mode ignores raw, unimported files")
+	var seen := {}
+	var stable := true
+	for x in 20:
+		for y in 20:
+			var v := AssetLibrary.pick_variant(3, Vector2i(x, y), 42)
+			seen[v] = true
+			stable = stable and v == AssetLibrary.pick_variant(3, Vector2i(x, y), 42) and v >= 0 and v < 3
+	check(stable and seen.size() == 3, "variant choice is stable, in range and uses every variant")
+	check(AssetLibrary.pick_variant(3, Vector2i(-7, -900), -5) in [0, 1, 2], "negative positions and seeds stay in range")
+
+
+func _cells(layer: TileMapLayer) -> Dictionary:
+	var out := {}
+	for p in layer.get_used_cells():
+		out[p] = [layer.get_cell_source_id(p), layer.get_cell_atlas_coords(p)]
+	return out
+
+
+func _test_map_tiles() -> void:
+	var mv = load("res://scripts/world/map_view.gd").new()
+	mv.art = AssetLibrary.new(TEST_ART, true)
+	add_child(mv)
+	GameState.new_game(321, ["Ann"], 1)
+	var d: DungeonGenerator = GameState.dungeon
+	mv.refresh()
+	var layer: TileMapLayer = mv.tile_layer
+	check(layer.get_used_cells().size() == d.revealed.size(), "every revealed tile is drawn (%d of %d)" % [layer.get_used_cells().size(), d.revealed.size()])
+	var floor_p: Vector2i = d.rooms[0]["center"]
+	var src := layer.tile_set.get_source(layer.get_cell_source_id(floor_p)) as TileSetAtlasSource
+	check(src != null and mv.art.textures("tiles/floor").has(src.texture), "floors use the floor art")
+	# grow the map, repainting only what changed, then compare with a full repaint
+	for k in 12:
+		if d.doors.is_empty():
+			break
+		var keys: Array = d.doors.keys()
+		keys.sort()
+		d.open_door(keys[0])
+		mv.refresh()
+	var incremental := _cells(layer)
+	check(incremental.size() == d.revealed.size(), "new rooms are drawn as they open")
+	mv._drawn_dungeon = null
+	mv.refresh()
+	check(_cells(layer) == incremental, "repainting only the changes gives the same map as a full repaint")
+	# wall autotiles: the piece follows the neighbours
+	_write_png(TEST_ART + "tiles/wall_autotile.png", Vector2i(128, 128), Color.WHITE)
+	mv.reload_art()
+	var ok := true
+	var walls := 0
+	for p in d.revealed:
+		if d.get_tile(p) == DungeonGenerator.Tile.WALL:
+			walls += 1
+			var m: int = mv.wall_mask(d, p)
+			ok = ok and layer.get_cell_atlas_coords(p) == Vector2i(m % 4, m / 4)
+	check(walls > 0 and ok, "each wall shows the autotile piece for its neighbours (%d walls)" % walls)
+	var corner := Vector2i(d.rooms[0]["rect"].position) - Vector2i.ONE
+	check(mv.wall_mask(d, corner) & 6 == 6, "a room's top-left corner joins right and down")
+	# tokens
+	check(mv.hero_texture("Fighter")[0] == null, "no hero art: drawn as a shape")
+	_write_png(TEST_ART + "tokens/hero.png", Vector2i(32, 32), Color.WHITE)
+	_write_png(TEST_ART + "tokens/hero_wizard.png", Vector2i(32, 32), Color.WHITE)
+	_write_png(TEST_ART + "monsters/goblin.png", Vector2i(32, 32), Color.WHITE)
+	_write_png(TEST_ART + "items/item.png", Vector2i(32, 32), Color.WHITE)
+	mv.reload_art()
+	check(mv.hero_texture("Fighter")[1] == true and mv.hero_texture("Fighter")[0] != null, "grey hero.png, tinted per player")
+	check(mv.hero_texture("Wizard")[1] == false, "a class sprite is drawn as is")
+	check(mv.monster_texture("goblin", "m1") != null and mv.monster_texture("orc", "m2") == null, "monster sprites by key")
+	check(mv.item_texture("Old Coin") != null, "items fall back to the generic icon")
+	# too-small art is refused, and the fallback color is used
+	_write_png(TEST_ART + "tiles/door_closed.png", Vector2i(8, 8), Color.WHITE)
+	mv.reload_art()
+	var door: Vector2i = d.doors.keys()[0]
+	var dsrc := layer.tile_set.get_source(layer.get_cell_source_id(door)) as TileSetAtlasSource
+	check(dsrc != null and dsrc.texture == mv._fallback(DungeonGenerator.Tile.DOOR_UNEXPLORED), "art smaller than a tile is refused; the color is drawn instead")
+	GameState.game_event.disconnect(mv.presenter.push)
+	mv.free()
+	_remove_tree(TEST_ART)
 
 
 func _test_sound_mapping() -> void:

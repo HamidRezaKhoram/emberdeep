@@ -9,6 +9,7 @@ const HASH_EVERY := 2.0      # the state hash is costlier; refresh it less often
 
 var map_view: Node            # for the Presenter (queue length, slow motion)
 var acting_id: Callable       # -> String, the hero commands apply to
+var reload_assets: Callable   # forgets loaded art and sound so edited files show up
 var _label := Label.new()
 var _clock := 0.0
 var _hash_clock := 0.0
@@ -74,7 +75,9 @@ func run(text: String) -> bool:
 		"reload":
 			var errs := GameData.load_all()
 			var input_errs := InputBindings.apply(Settings.load_config())
-			GameState.add_log("system", "[debug] data reloaded: %d errors%s" % [errs.size() + input_errs.size(), "" if errs.is_empty() else " (" + "; ".join(errs) + ")"])
+			if reload_assets.is_valid():
+				reload_assets.call()
+			GameState.add_log("system", "[debug] data, art and sound reloaded: %d errors%s" % [errs.size() + input_errs.size(), "" if errs.is_empty() else " (" + "; ".join(errs) + ")"])
 		"hash":
 			GameState.add_log("system", "[debug] state hash %s" % GameState.state_hash())
 		_:

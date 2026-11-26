@@ -35,3 +35,5 @@ host-authoritative multiplayer (hot-seat, LAN, later Steam). Read `docs/ARCHITEC
 - **Balance numbers live in `game/data/`** (`docs/DATA.md`), never as constants in code.
 - **Changing dungeon generation?** Bump `generator_version` in `data/rules/dungeon.json`.
   **Changing the save layout?** Bump `SaveGame.FORMAT` and add a migration (`docs/SAVES.md`).
+- **Art and sound are found by file name** through `AssetLibrary` (`docs/ASSETS.md`); every
+  lookup needs a fallback (shape or silence). Don't create art or audio content: the owner makes it.

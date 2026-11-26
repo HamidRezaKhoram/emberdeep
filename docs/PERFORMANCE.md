@@ -18,6 +18,8 @@ one goes over its budget in `game/tests/budgets.json`. CI runs it on every push.
 | a full round of a 20-monster fight | 10 ms | 1.9 ms |
 | save write / load, 300 rooms | 400 / 800 ms | 11 / 28 ms |
 | network snapshot without the map | 200 KB | 122 KB |
+| draw the whole map (loading a game), 21k tiles | 1000 ms | 103 ms |
+| repaint after a door opens (incl. generating it) | 2 ms | 0.08 ms |
 
 Budgets are set well above the measured values so a slower CI machine passes. A regression that
 changes how cost scales (an O(n) scan in a hot path) still blows through them. Tighten budgets

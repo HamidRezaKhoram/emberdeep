@@ -18,6 +18,9 @@ var rooms: Array = []           # [{id, rect: Rect2i, depth, kind, center, entry
 var doors: Dictionary = {}      # unexplored door Vector2i -> {room: id, dir: Vector2i}
 var opened_doors: Array = []    # Vector2i, in the order they were opened (for saves)
 var _room_of: Dictionary = {}   # floor Vector2i -> room id. Index for room_at(); rebuilt, never sent.
+# View-only change tracking for the map view (never saved, sent or hashed):
+var _changed: Dictionary = {}   # Vector2i -> true: tiles set or revealed since take_changes()
+var _changed_all := true        # everything is new (fresh map, or loaded from a dict)
 
 
 func _init(seed_value: int = 1) -> void:
@@ -133,10 +136,24 @@ func open_door(p: Vector2i) -> Dictionary:
 			opened_doors.append(p)
 			return _build(p, d, plan, parent, rng)
 	tiles[p] = Tile.RUBBLE
+	_changed[p] = true
 	doors.erase(p)
 	opened_doors.append(p)
 	_ensure_frontier(rng)
 	return {}
+
+
+## For the map view: writes the tiles changed since the last call into `out` and
+## returns false, or returns true when everything should be redrawn. Lets the view
+## update only what a door opening touched, however big the map is.
+func take_changes(out: Array[Vector2i]) -> bool:
+	var all := _changed_all
+	if not all:
+		for p in _changed:
+			out.append(p)
+	_changed.clear()
+	_changed_all = false
+	return all
 
 
 ## SHA-256 of every tile, in a fixed order: two maps with the same hash are identical.
@@ -167,6 +184,8 @@ func from_dict(data: Dictionary) -> void:
 	revealed = data.get("revealed", {})
 	rooms = data.get("rooms", [])
 	doors = data.get("doors", {})
+	_changed.clear()
+	_changed_all = true
 	_room_of.clear()
 	for room in rooms:
 		_index_room(room)
@@ -194,6 +213,7 @@ func _carve_room(rect: Rect2i, depth: int, kind: String) -> Dictionary:
 			elif get_tile(p) == Tile.VOID:
 				tiles[p] = Tile.WALL
 			revealed[p] = true
+			_changed[p] = true
 	rooms.append(room)
 	_index_room(room)
 	return room
@@ -213,6 +233,7 @@ func _add_door_on_wall(room: Dictionary, d: Vector2i, rng: RandomNumberGenerator
 	if get_tile(p) != Tile.WALL or get_tile(p + d) != Tile.VOID:
 		return false
 	tiles[p] = Tile.DOOR_UNEXPLORED
+	_changed[p] = true
 	doors[p] = {"room": room["id"], "dir": d}
 	return true
 
@@ -253,11 +274,14 @@ func _build(p: Vector2i, d: Vector2i, plan: Dictionary, parent: Dictionary, rng:
 	for c in plan["corridor"]:
 		tiles[c] = Tile.FLOOR
 		revealed[c] = true
+		_changed[c] = true
 		for side in [c + perp, c - perp]:
 			if get_tile(side) == Tile.VOID:
 				tiles[side] = Tile.WALL
 			revealed[side] = true
+			_changed[side] = true
 	tiles[p] = Tile.DOOR_OPEN
+	_changed[p] = true
 	doors.erase(p)
 	var depth: int = int(parent["depth"]) + 1
 	var rules := GameData.dungeon
@@ -265,6 +289,7 @@ func _build(p: Vector2i, d: Vector2i, plan: Dictionary, parent: Dictionary, rng:
 	var room := _carve_room(plan["rect"], depth, kind)
 	var entry: Vector2i = plan["entry"]
 	tiles[entry] = Tile.DOOR_OPEN
+	_changed[entry] = true
 	room["entry"] = entry
 	var exit_chance := rules.exit_chance if depth < rules.deep_after else rules.exit_chance_deep
 	for nd in DIRS:

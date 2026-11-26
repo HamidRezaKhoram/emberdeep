@@ -47,7 +47,7 @@ Only the host needs a model or a key. Settings live in
 Arrows / WASD or D-pad / stick move · walk into a monster to attack, or into a dying ally to help ·
 Space (A) ends your combat turn · Tab (X) switches hero (hot-seat) · Enter (Y) talks to the GM ·
 Esc (B) leaves the text box · F5 / F9 quick save / load · F12 saves a replay for bug reports.
-All rebindable: [docs/INPUT.md](docs/INPUT.md). Saves and replays: [docs/SAVES.md](docs/SAVES.md).
+All rebindable: [docs/INPUT.md](docs/INPUT.md). Saves and replays: [docs/SAVES.md](docs/SAVES.md). Adding art and sound: [docs/ASSETS.md](docs/ASSETS.md).
 Gold squares are unexplored doors.
 
 ## How it fits together
