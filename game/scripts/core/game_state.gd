@@ -49,6 +49,11 @@ var _init_order: Dictionary = {}       # actor id -> [initiative total, dex scor
 ## the rules in order ({start, inputs}). See Replay and docs/SAVES.md.
 var recording: Dictionary = {}
 var _record_paused := false
+## Debug commands (spawn, heal, end fight) are accepted only when this is on, and only
+## from the host's own player (sender 1). They go through handle_intent like any input,
+## so they are recorded and replays still reproduce. main.gd turns it on in debug builds.
+var debug_enabled := false
+var _debug_ops := 0
 
 
 func _ready() -> void:
@@ -83,6 +88,7 @@ func new_game(seed_value: int, hero_names: Array, owner_peer: int = 1) -> void:
 	var names: Array = []
 	for n in hero_names:
 		names.append(str(n))
+	_debug_ops = 0
 	_start_recording({"kind": "new", "seed": world_seed, "heroes": names, "owner": owner_peer})
 	var start := dungeon.create_start_room()
 	map_version += 1
@@ -158,6 +164,9 @@ func handle_intent(sender: int, intent: Dictionary) -> void:
 		"end_turn":
 			if mode == "combat" and current_actor() == actor_id:
 				_advance_turn()
+		"debug":
+			if debug_enabled and sender == 1:
+				_intent_debug(hero, intent)
 		"say":
 			var text := str(intent.get("text", "")).strip_edges().left(400)
 			if not text.is_empty():
@@ -294,6 +303,41 @@ func apply_snapshot(s: Dictionary) -> void:
 	changed.emit()
 
 
+# --- debug commands (debug builds only; see docs/DEBUG.md) ---------------------------
+
+## {type: "debug", op: "spawn"|"heal"|"clear", key?, count?}
+func _intent_debug(hero: Dictionary, intent: Dictionary) -> void:
+	_debug_ops += 1
+	match str(intent.get("op", "")):
+		"spawn":
+			var key := str(intent.get("key", ""))
+			var rid := dungeon.room_at(hero["pos"])
+			if not GameData.monsters.has(key) or rid < 0:
+				add_log("system", "[debug] can't spawn '%s' here (known: %s; must be inside a room)" % [key, ", ".join(GameData.monsters.keys())])
+				return
+			var rng := dungeon.rng_for("debug:%d" % _debug_ops)
+			var n := 0
+			for i in clampi(int(intent.get("count", 1)), 1, 6):
+				if _spawn_monster(key, dungeon.rooms[rid], rng, true):
+					n += 1
+			add_log("system", "[debug] spawned %d %s" % [n, key])
+			if mode == "explore" and _any_monster_awake():
+				_start_combat()
+		"heal":
+			for id in player_order:
+				var h: Dictionary = players[id]
+				h["dead"] = false
+				_revive(h, int(h["max_hp"]))
+			add_log("system", "[debug] party healed")
+		"clear":
+			var n := 0
+			for id in _sorted_awake_ids():
+				_remove_monster(id)
+				n += 1
+			add_log("system", "[debug] removed %d awake monsters" % n)
+			_check_combat_over()
+
+
 # --- saves, replays and state hashing ------------------------------------------------
 
 ## SHA-256 of everything that defines the game. map_version and log/event sequence
@@ -322,7 +366,7 @@ func to_save() -> Dictionary:
 		"mode": mode, "initiative": initiative.duplicate(), "turn_index": turn_index, "round": round_num,
 		"game_over": game_over, "log": log_entries.duplicate(true), "next_id": _next_id,
 		"gm_spawned": _gm_spawned.duplicate(), "gm_actions": _gm_actions, "init_order": _init_order.duplicate(true),
-		"dice_state": dice.rng.state,
+		"dice_state": dice.rng.state, "debug_ops": _debug_ops,
 	}
 
 
@@ -361,6 +405,7 @@ func load_save(d: Dictionary, owner_peer: int = 1) -> String:
 		log_seq += 1
 		e["seq"] = log_seq   # renumbered: sequence numbers only ever grow
 	_next_id = int(d["next_id"])
+	_debug_ops = int(d.get("debug_ops", 0))
 	_gm_spawned = d["gm_spawned"].duplicate()
 	_gm_actions = int(d["gm_actions"])
 	_init_order = d["init_order"].duplicate(true)
@@ -378,6 +423,7 @@ func load_save(d: Dictionary, owner_peer: int = 1) -> String:
 
 func _start_recording(start: Dictionary) -> void:
 	start["generator_version"] = GameData.dungeon.generator_version
+	start["debug"] = debug_enabled
 	start["data_fingerprint"] = GameData.fingerprint
 	recording = {"start": start, "inputs": []}
 

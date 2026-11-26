@@ -46,6 +46,7 @@ static func begin(rec: Dictionary) -> String:
 	if int(rec.get("format", 0)) > FORMAT:
 		return "replay from a newer version of the game"
 	var start: Dictionary = rec["start"]
+	GameState.debug_enabled = bool(start.get("debug", false))   # replay debug commands only if they were allowed
 	if int(start.get("generator_version", -1)) != GameData.dungeon.generator_version:
 		return "replay made with dungeon generator v%s, this game uses v%d" % [str(start.get("generator_version")), GameData.dungeon.generator_version]
 	match start.get("kind"):

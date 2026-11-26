@@ -12,6 +12,7 @@ var in_game := false
 var controlled_id := ""
 var repeater: MoveRepeater
 var audio: AudioDirector
+var debug: DebugTools   # debug builds only
 var ui_scale := 1.0
 
 # menu widgets
@@ -59,7 +60,14 @@ func _ready() -> void:
 	Net.lan_game_found.connect(_on_lan_found)
 	Net.joined.connect(_show_game)
 	Net.start_discovery()
+	if OS.is_debug_build():
+		debug = DebugTools.new()
+		debug.map_view = map_view
+		debug.acting_id = _acting_id
+		add_child(debug)
 	var args := OS.get_cmdline_user_args()
+	if "--play" in args:
+		_quick_play.call_deferred(args)
 	if "--smoke" in args:
 		_run_smoke.call_deferred()
 	for a in args:
@@ -366,6 +374,8 @@ func _cycle_hero() -> void:
 func _on_say(text: String) -> void:
 	input_line.clear()
 	input_line.release_focus()
+	if debug and debug.run(text.strip_edges()):
+		return
 	if not text.strip_edges().is_empty():
 		Net.send_intent({"type": "say", "text": text, "actor": _acting_id()})
 
@@ -398,6 +408,16 @@ func _on_log(entry: Dictionary) -> void:
 		"roll": log_label.append_text("[color=#9be07a]%s[/color]\n" % text)
 		"combat": log_label.append_text("[color=#ff9f8a]%s[/color]\n" % text)
 		_: log_label.append_text("[color=#a9a3b3]%s[/color]\n" % text)
+
+
+## `-- --play [--seed=N] [--heroes=N]`: skip the menu, straight into a local game.
+func _quick_play(args: PackedStringArray) -> void:
+	for a in args:
+		if a.begins_with("--seed="):
+			seed_edit.text = a.trim_prefix("--seed=")
+		elif a.begins_with("--heroes="):
+			heroes_spin.value = clampi(a.trim_prefix("--heroes=").to_int(), 1, 4)
+	_start_local()
 
 
 # --- replays ----------------------------------------------------------------------

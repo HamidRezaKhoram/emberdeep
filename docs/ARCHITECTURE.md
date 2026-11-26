@@ -49,6 +49,7 @@
 | `game/scripts/world/dungeon_generator.gd` | `DungeonGenerator`: door-driven room accretion, fog of war, line of sight, O(1) `room_at()` through a tile → room index. |
 | `game/scripts/world/pathfinder.gd` | `Pathfinder`: A* on the tile grid with a cap on tiles expanded, so cost doesn't grow with the map. Deterministic tie-breaking. |
 | `game/scripts/world/map_view.gd` | Two layers: tiles (redrawn only when the map changes) and tokens (animated, culled to the camera). Frame-rate-independent camera. |
+| `game/scripts/debug/debug_tools.gd` | `DebugTools` (debug builds only): F1 overlay, spawn/heal/clear as recorded debug intents, slow motion, data hot reload, `/commands`. See [DEBUG.md](DEBUG.md). |
 | `game/scripts/view/presenter.gd` | `Presenter`: plays `GameState.game_event`s back over time (slides, lunges, flashes, floating numbers), catches up when behind, snaps to the truth when idle. See [EVENTS.md](EVENTS.md). |
 | `game/scripts/view/audio_director.gd` | `AudioDirector`: sound effects on played events, music crossfade (explore/combat), ambience by room kind; files by name, missing = silent. |
 | `game/scripts/net/network.gd` | Autoload `Net`: ENet host/join, intents, snapshots, LAN beacon. |

@@ -43,6 +43,8 @@ var ghosts: Dictionary = {}
 var offsets: Dictionary = {}
 ## camera shake left, seconds
 var shake := 0.0
+## 1 = normal; debug slow motion sets 0.25 to inspect animations
+var time_scale := 1.0
 
 var _current: Dictionary = {}
 var _stale := true   # the true state may have changed since the last reconcile
@@ -90,6 +92,7 @@ func animating() -> bool:
 ## Advances playback. `truth` returns {actor id: Vector2i}, where every token really
 ## is now; it is only called when idle and something changed, not every frame.
 func advance(delta: float, truth: Callable) -> void:
+	delta *= time_scale
 	_tick_effects(delta)
 	var speed := 1.0 + maxf(0.0, float(queue.size() - CATCH_UP_AFTER)) * 0.5
 	var budget := delta * speed

@@ -12,6 +12,12 @@
     "restart":     {"label": "New delve (after a loss)", "bind": ["key:R", "joy_button:start"]},
     "quick_save":  {"label": "Quick save",       "bind": ["key:F5"]},
     "quick_load":  {"label": "Quick load",       "bind": ["key:F9"]},
-    "save_replay": {"label": "Save a replay (for bug reports)", "bind": ["key:F12"]}
+    "save_replay": {"label": "Save a replay (for bug reports)", "bind": ["key:F12"]},
+    "debug_overlay": {"label": "Debug: stats overlay",        "bind": ["key:F1"], "debug": true},
+    "debug_spawn":   {"label": "Debug: spawn a monster",      "bind": ["key:F2"], "debug": true},
+    "debug_heal":    {"label": "Debug: heal the party",       "bind": ["key:F3"], "debug": true},
+    "debug_clear":   {"label": "Debug: end the fight",        "bind": ["key:F4"], "debug": true},
+    "debug_slowmo":  {"label": "Debug: slow-motion animation", "bind": ["key:F7"], "debug": true},
+    "debug_reload":  {"label": "Debug: reload data files",    "bind": ["key:F8"], "debug": true}
   }
 }

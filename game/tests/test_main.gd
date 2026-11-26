@@ -35,6 +35,7 @@ func _ready() -> void:
 	_test_save_roundtrip()
 	_test_save_files_and_versions()
 	_test_replay_files()
+	_test_debug_commands()
 	print("\n%d passed, %d failed" % [passes, failures])
 	get_tree().quit(1 if failures > 0 else 0)
 
@@ -872,3 +873,37 @@ func _test_replay_files() -> void:
 	var r2 := Replay.run(Replay.read(path))
 	check(r2["error"] == "" and r2["hash"] == final2, "a replay that starts from a save, with a GM reply, reproduces (%s)" % r2["error"])
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
+# --- debug commands -------------------------------------------------------------------
+
+func _test_debug_commands() -> void:
+	GameState.debug_enabled = false
+	GameState.new_game(321, ["Dev", "Two"], 1)
+	var hid: String = GameState.player_order[0]
+	GameState.handle_intent(1, {"type": "debug", "op": "spawn", "key": "orc", "count": 2, "actor": hid})
+	check(GameState.monsters.is_empty(), "debug commands do nothing unless enabled")
+	GameState.debug_enabled = true
+	GameState.new_game(321, ["Dev", "Two"], 1)
+	hid = GameState.player_order[0]
+	var other: String = GameState.add_player("Peer", 2)   # a LAN player's hero (recorded join)
+	GameState.handle_intent(2, {"type": "debug", "op": "spawn", "key": "orc", "count": 2, "actor": other})
+	check(GameState.monsters.is_empty(), "only the host's own player may use debug commands")
+	GameState.handle_intent(1, {"type": "debug", "op": "spawn", "key": "orc", "count": 2, "actor": hid})
+	check(GameState.monsters.size() == 2 and GameState.mode == "combat", "debug spawn adds awake monsters and starts a fight")
+	GameState.handle_intent(1, {"type": "debug", "op": "spawn", "key": "dragon", "count": 1, "actor": hid})
+	check(GameState.monsters.size() == 2, "unknown monsters are refused")
+	GameState.players[hid]["hp"] = 3
+	GameState.handle_intent(1, {"type": "debug", "op": "heal", "actor": GameState.current_actor() if GameState.players.has(GameState.current_actor()) else hid})
+	check(int(GameState.players[hid]["hp"]) == int(GameState.players[hid]["max_hp"]), "debug heal")
+	var actor: String = GameState.current_actor() if GameState.players.has(GameState.current_actor()) else hid
+	GameState.handle_intent(1, {"type": "debug", "op": "clear", "actor": actor})
+	check(GameState.monsters.is_empty() and GameState.mode == "explore", "debug clear ends the fight")
+	check(_invariant_error().is_empty(), "invariants hold after debug commands (%s)" % _invariant_error())
+	var final := GameState.state_hash()
+	var rec := GameState.recording.duplicate(true)
+	rec["final_hash"] = final
+	GameState.debug_enabled = false
+	var r := Replay.run(rec)
+	check(r["matches"], "debug commands are recorded and replay exactly")
+	GameState.debug_enabled = false
