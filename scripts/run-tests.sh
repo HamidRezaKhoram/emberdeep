@@ -13,8 +13,12 @@ fi
 # and also fail on any engine-reported script error.
 LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT
+# GNU timeout is `gtimeout` on macOS with Homebrew coreutils; run uncapped if neither exists.
+TIMEOUT=()
+if command -v timeout >/dev/null; then TIMEOUT=(timeout 180)
+elif command -v gtimeout >/dev/null; then TIMEOUT=(gtimeout 180); fi
 set +e
-timeout 180 "$GODOT" --headless --path "$ROOT/game" res://tests/tests.tscn 2>&1 | tee "$LOG"
+${TIMEOUT[@]+"${TIMEOUT[@]}"} "$GODOT" --headless --path "$ROOT/game" res://tests/tests.tscn 2>&1 | tee "$LOG"
 STATUS=${PIPESTATUS[0]}
 set -e
 if grep -qE "SCRIPT ERROR|Parse Error|Failed to load script" "$LOG"; then

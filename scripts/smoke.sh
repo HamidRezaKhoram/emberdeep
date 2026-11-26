@@ -8,6 +8,12 @@ GODOT="${GODOT:-}"
 if [[ -z "$GODOT" ]]; then
   if [[ -x "$ROOT/.tools/godot" ]]; then GODOT="$ROOT/.tools/godot"; else GODOT="godot"; fi
 fi
-SHOT="$(realpath -m "${1:-$ROOT/build/smoke.png}")"
+# Absolute path without GNU `realpath -m`, so this also runs on macOS.
+SHOT="${1:-$ROOT/build/smoke.png}"
 mkdir -p "$(dirname "$SHOT")"
-timeout 300 "$GODOT" --path "$ROOT/game" -- --smoke --shot="$SHOT" --steps="${2:-400}" 2>&1 | grep -E "SMOKE|SCRIPT ERROR|ERROR"
+SHOT="$(cd "$(dirname "$SHOT")" && pwd)/$(basename "$SHOT")"
+# GNU timeout is `gtimeout` on macOS with Homebrew coreutils; run uncapped if neither exists.
+TIMEOUT=()
+if command -v timeout >/dev/null; then TIMEOUT=(timeout 300)
+elif command -v gtimeout >/dev/null; then TIMEOUT=(gtimeout 300); fi
+${TIMEOUT[@]+"${TIMEOUT[@]}"} "$GODOT" --path "$ROOT/game" -- --smoke --shot="$SHOT" --steps="${2:-400}" 2>&1 | grep -E "SMOKE|SCRIPT ERROR|ERROR"
