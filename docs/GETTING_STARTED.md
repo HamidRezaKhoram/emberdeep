@@ -37,6 +37,8 @@ Installed and verified on 2026-11-25 (Apple Silicon, macOS 15): 355 tests pass, 
 
 ## 2. Learn Godot + GDScript (about a week of evenings)
 
+The full curriculum, with exercises in this codebase, is in [LEARNING.md](LEARNING.md). The short version:
+
 Do these in order; the official docs are the best resource.
 
 1. **Getting Started → Step by step** (nodes, scenes, scripts, signals):

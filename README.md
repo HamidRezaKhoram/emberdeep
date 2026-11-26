@@ -15,6 +15,7 @@ scripts/fetch-godot.sh            # downloads the pinned Godot 4.6.3 editor into
 scripts/run-tests.sh              # headless test suite
 .tools/godot --path game          # play from source
 scripts/smoke.sh                  # bot plays a seeded game in a window, saves build/smoke.png
+scripts/bench.sh                  # performance budgets on a 300-room dungeon
 ```
 
 Build the executable:
