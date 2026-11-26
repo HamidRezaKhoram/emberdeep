@@ -103,6 +103,26 @@ func _ready() -> void:
 	DirAccess.remove_absolute(SaveGame.path_for("bench"))
 	report("snapshot_kb_no_map", var_to_bytes(GameState.to_snapshot(false, -1)).size() / 1024.0, "%d monsters" % GameState.monsters.size())
 
+	# drawing the map: a full repaint (loading a game) and one door opening at 300 rooms
+	var mv = load("res://scripts/world/map_view.gd").new()
+	add_child(mv)
+	t = Time.get_ticks_usec()
+	mv.refresh()
+	report("map_full_paint_ms", _ms(t), "%d tiles" % d.revealed.size())
+	t = Time.get_ticks_usec()
+	var painted := 0
+	for k in 20:
+		if d.doors.is_empty():
+			break
+		var keys: Array = d.doors.keys()
+		keys.sort()
+		d.open_door(keys[0])
+		mv.refresh()
+		painted += 1
+	report("map_door_paint_ms", _ms(t) / maxi(painted, 1), "per door, incl. generation")
+	GameState.game_event.disconnect(mv.presenter.push)
+	mv.free()
+
 	print("\nbench: %d over budget" % failures)
 	get_tree().quit(1 if failures > 0 else 0)
 

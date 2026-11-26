@@ -64,6 +64,9 @@ func _ready() -> void:
 		debug = DebugTools.new()
 		debug.map_view = map_view
 		debug.acting_id = _acting_id
+		debug.reload_assets = func():
+			map_view.reload_art()
+			audio.reload_sounds()
 		add_child(debug)
 	var args := OS.get_cmdline_user_args()
 	if "--play" in args:

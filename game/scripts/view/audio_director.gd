@@ -1,22 +1,19 @@
 class_name AudioDirector
 extends Node
 ## Plays sound for what the Presenter shows, in sync with the animation. Files are
-## found by name under res://audio/ (docs/CONTENT_PLAN.md, "Integration contract:
-## audio"); a missing file is silence, so sounds can be added one at a time.
+## found by name under res://audio/ through an AssetLibrary (docs/ASSETS.md); a missing
+## file is silence, so sounds can be added one at a time.
 ##
 ##   audio/sfx/<event>.wav|ogg        variants: <event>_2, _3 … picked at random
 ##   audio/music/explore.ogg, combat.ogg, victory.ogg, defeat.ogg   crossfaded
 ##   audio/ambience/<room kind>.ogg   follows the room the focused hero is in
 
-const SFX_DIR := "res://audio/sfx/"
-const MUSIC_DIR := "res://audio/music/"
-const AMBIENCE_DIR := "res://audio/ambience/"
-const EXTENSIONS := ["wav", "ogg"]
-const MAX_VARIANTS := 9
+const AUDIO_DIR := "res://audio/"
 const VOICES := 8                 # sound effects that can overlap
 const CROSSFADE := 1.0            # seconds
 const BUSES := ["Music", "SFX", "Ambience"]
 
+var assets := AssetLibrary.new(AUDIO_DIR)
 var focus_id := ""                # the hero whose room sets the ambience
 var _voices: Array[AudioStreamPlayer] = []
 var _next_voice := 0
@@ -24,7 +21,6 @@ var _music: Array[AudioStreamPlayer] = []   # two players, for crossfades
 var _music_track := ""
 var _ambience: Array[AudioStreamPlayer] = []
 var _ambience_track := ""
-var _cache: Dictionary = {}       # path stem -> Array of AudioStream ([] = no file)
 var _rng := RandomNumberGenerator.new()   # picks variants; view-only, never the game's dice
 
 
@@ -61,6 +57,11 @@ func on_played(ev: Dictionary) -> void:
 		"moved", "spawned":
 			if ev.get("actor") == focus_id:
 				_update_ambience()
+
+
+## Forgets every loaded file (debug F8), so new or edited sounds play next time.
+func reload_sounds() -> void:
+	assets.clear()
 
 
 ## GM narration arriving (connect to GameState.log_added).
@@ -106,7 +107,7 @@ static func sound_for(ev: Dictionary, by_hero: bool) -> Array[String]:
 ## Plays the first of `names` that has a file. Returns the name played, or "".
 func play_sfx(names: Array[String]) -> String:
 	for n in names:
-		var streams := _streams(SFX_DIR + n)
+		var streams := assets.sounds("sfx/" + n)
 		if streams.is_empty():
 			continue
 		var p := _voices[_next_voice]
@@ -117,27 +118,11 @@ func play_sfx(names: Array[String]) -> String:
 	return ""
 
 
-## Every variant of a sound: stem.wav/ogg, stem_2…stem_9. Cached, including misses.
-func _streams(stem: String) -> Array:
-	if _cache.has(stem):
-		return _cache[stem]
-	var out: Array = []
-	for i in MAX_VARIANTS:
-		var s := stem if i == 0 else "%s_%d" % [stem, i + 1]
-		for ext in EXTENSIONS:
-			var path := "%s.%s" % [s, ext]
-			if ResourceLoader.exists(path):
-				out.append(load(path))
-				break
-	_cache[stem] = out
-	return out
-
-
 func _play_music(track: String) -> void:
 	if track == _music_track:
 		return
 	_music_track = track
-	_crossfade(_music, _streams(MUSIC_DIR + track))
+	_crossfade(_music, assets.sounds("music/" + track))
 
 
 func _update_ambience() -> void:
@@ -150,7 +135,7 @@ func _update_ambience() -> void:
 	if kind == _ambience_track:
 		return
 	_ambience_track = kind
-	_crossfade(_ambience, _streams(AMBIENCE_DIR + kind))
+	_crossfade(_ambience, assets.sounds("ambience/" + kind))
 
 
 ## Fades the playing one of a pair out and the other in with `streams` (or to silence).

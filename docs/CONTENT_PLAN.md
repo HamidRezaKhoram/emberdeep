@@ -2,7 +2,7 @@
 
 How to make Emberdeep's content, and the **integration contract**: the folders, file names and
 formats the code will look for. If you follow the contract, new files show up in the game with
-no code changes once the hooks are built (core plan, Phase D).
+no code changes. **The hooks are built** (Phase D); the exact rules are in [ASSETS.md](ASSETS.md).
 
 Start with **story**, because it decides the look and the sound. Then art and audio can go in parallel.
 
@@ -101,7 +101,8 @@ Each step gives you something visible in the game.
 5. **Item icon** (a generic one is enough to start).
 6. **Floor and wall variants** (2-4 each) so rooms don't look tiled.
 7. **Region tile sets:** a different floor and wall look per region.
-8. **Wall autotiles:** a 16-tile "match sides" set (corners and edges), so walls connect properly.
+8. **Wall autotiles:** a 16-piece "match sides" sheet, `tiles/wall_autotile.png` (128×128), so walls connect properly.
+   The piece order is in [ASSETS.md](ASSETS.md#wall-autotiles).
    Godot's `TileMapLayer` terrains pick the right piece automatically.
 9. **UI:** panel frame, buttons, portraits, a d20 for the roll animation.
 
@@ -111,19 +112,20 @@ Each step gives you something visible in the game.
 game/art/
   palette.png
   tiles/
-    floor.png  floor_2.png  floor_3.png      # numbered = random variants
+    floor.png  floor_2.png  floor_3.png      # numbered = variants
     wall.png   wall_2.png
+    wall_autotile.png                        # 4x4 sheet of joined wall pieces (optional)
     door_closed.png  door_open.png  rubble.png
   regions/<region id>/tiles/...              # same names; overrides tiles/ in that region
   tokens/
     hero.png                                  # greyscale, tinted in game
     hero_<class>.png                          # optional, e.g. hero_fighter.png
   monsters/<monster key>.png                  # giant_rat.png, goblin.png, skeleton.png ...
-  items/item.png  items/<item id>.png
-  ui/...
+  items/item.png  items/<item name>.png      # e.g. old_coin.png
+  ui/...                                      # not used yet (UI theme comes later)
 ```
 
-Rules the code will follow:
+Rules the code follows (built; details in [ASSETS.md](ASSETS.md)):
 
 - A file that's missing falls back to the colored shape drawn today, so you can add art one file at a time.
 - `name_2.png`, `name_3.png` … are variants. The game picks one per tile with the map's seed, so a tile looks the same every time you see it.
@@ -231,7 +233,7 @@ What you can do now, and when the game starts using it.
 |---|---|---|
 | Story pitch, regions, palette | Core Phase A: gameplay fixes | nothing visible yet; the plan is set |
 | First tiles and tokens, first SFX | Core Phase B: event stream + smooth animation | events are named and ready for sound |
-| Monsters, variants, two music loops | Core Phase D: art loader, `TileMapLayer`, audio manager | **your files appear in the game** |
+| Monsters, variants, two music loops | Core Phase D: art loader, `TileMapLayer`, audio manager (**done**) | **your files appear in the game**; F8 reloads them |
 | `world.md`, `regions.json`, `rooms.json` | regions in the generator, lore in GM STATE | the GM speaks in your world's voice, and regions change the look and music |
 | Wall autotiles, region tile sets, UI | terrain autotiling, region overrides, UI theme | it looks like a finished game |
 
