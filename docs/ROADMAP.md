@@ -13,15 +13,41 @@ Each milestone ends with something playable. Tick items as they land.
 - [x] Headless tests: dice, rules, generator determinism and layout, ownership, GM validation, combat ends, snapshots
 - [x] First run on a real machine (Fedora, Intel UHD 630): tests pass, debug build runs, smoke bot plays a delve
 
+## How we scope
+
+- **Every milestone ends playable.** If it isn't fun with squares, art won't fix it: playtest the
+  smoke bot's seeds and your own games before calling a milestone done.
+- **Done means:** tests and performance budgets pass, the smoke bot plays, docs match the code,
+  and a replay from the previous milestone still verifies (or the change in behavior is intended
+  and noted).
+- **Cut, don't half-build.** A feature that slips moves to a later milestone whole. Nothing
+  half-wired ships behind a flag.
+- **Not now:** procedural quests, crafting, character customization beyond the four SRD classes,
+  multiple levels loaded at once, a mobile build. Revisit after M3.
+
+## Engineering foundations (done before M1 content)
+
+- [x] Data-driven, validated rules and balance ([DATA.md](DATA.md))
+- [x] Rebindable input, controller, UI scale ([INPUT.md](INPUT.md))
+- [x] Event stream and animated presentation, audio hook ([EVENTS.md](EVENTS.md))
+- [x] Versioned saves, replay files ([SAVES.md](SAVES.md))
+- [x] Debug tools, quick launch ([DEBUG.md](DEBUG.md))
+- [x] Performance budgets in CI ([PERFORMANCE.md](PERFORMANCE.md))
+
 ## M1: A real session (vertical slice)
 
 - [ ] Character creation: 4 SRD classes (Fighter, Rogue, Cleric, Wizard), species, background, standard array
 - [ ] Skills + proficiency in checks; GM can ask for a *skill* (Perception, Stealth, Athletics...)
 - [ ] Advantage / disadvantage; the GM may grant it with a reason
-- [ ] Death saving throws, Stabilize, healing potions usable
+- [x] Death saving throws, Stabilize (Wisdom (Medicine) DC 10)
+- [ ] Healing potions usable
+- [x] Local encounters: creatures sleep until seen, chase along real paths (bounded A*), lose track when cut off
+- [x] Initiative ties by Dexterity; creatures can join a fight in progress
+- [x] Replay test: same seed + same inputs = identical game, with state invariants checked every step
 - [ ] Ranged attacks with line of sight; opportunity attacks
 - [ ] Short and long rests; Hit Dice
-- [ ] Save / load (seed + opened doors + entities + log + GM summary)
+- [x] Save / load: versioned, map rebuilt from seed + doors and hash-checked, safe binary format, atomic writes ([SAVES.md](SAVES.md))
+- [x] Replay files: record every input, verify or watch from the command line, F12 for bug reports
 - [ ] Rolling "story so far" summary and world memory for the GM
 - [ ] Settings screen: provider, model, effort, local URL; privacy note
 - [ ] Verified SRD 5.2.1 stat blocks for ~20 low-CR monsters
@@ -29,10 +55,13 @@ Each milestone ends with something playable. Tick items as they land.
 ## M2: Looks and feels like a game
 
 - [ ] Pixel-art tileset in TileMapLayer, autotiled walls, light radius, remembered tiles
-- [ ] Token sprites, hit/miss/damage popups, dice roll animation
+- [x] Event stream + Presenter: sliding tokens, attack lunges, hit flashes, damage/miss popups, crit shake, catch-up playback ([EVENTS.md](EVENTS.md))
+- [x] Audio hook: SFX per event, explore/combat music crossfade, ambience per room kind, volume settings
+- [ ] Token sprites, dice roll animation
 - [ ] Streaming narration (typewriter as tokens arrive)
 - [ ] Sound: ambience per room kind, combat SFX
-- [ ] Controller support; mouse click-to-move with path preview
+- [x] Controller support, rebindable actions, game-clock move repeat, UI scale ([INPUT.md](INPUT.md))
+- [ ] Mouse click-to-move with path preview
 - [ ] Character sheet and inventory panels
 
 ## M3: Friends

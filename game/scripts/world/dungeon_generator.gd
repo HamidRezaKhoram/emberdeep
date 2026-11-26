@@ -9,10 +9,7 @@ extends RefCounted
 
 enum Tile { VOID = 0, FLOOR = 1, WALL = 2, DOOR_UNEXPLORED = 3, DOOR_OPEN = 4, RUBBLE = 5 }
 
-const ROOM_KINDS := ["chamber", "hall", "shrine", "crypt", "storeroom", "cavern", "library", "barracks", "well room", "kennel"]
 const DIRS := [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]
-const MAX_ATTEMPTS := 8
-const SHRINK_AFTER := 4
 
 var world_seed: int
 var tiles: Dictionary = {}      # Vector2i -> Tile
@@ -20,10 +17,12 @@ var revealed: Dictionary = {}   # Vector2i -> true (fog of war: what the party h
 var rooms: Array = []           # [{id, rect: Rect2i, depth, kind, center, entry}]
 var doors: Dictionary = {}      # unexplored door Vector2i -> {room: id, dir: Vector2i}
 var opened_doors: Array = []    # Vector2i, in the order they were opened (for saves)
+var _room_of: Dictionary = {}   # floor Vector2i -> room id. Index for room_at(); rebuilt, never sent.
 
 
 func _init(seed_value: int = 1) -> void:
 	world_seed = seed_value
+	GameData.ensure_loaded()
 
 
 func rng_for(key: String) -> RandomNumberGenerator:
@@ -48,12 +47,44 @@ func is_open_floor(p: Vector2i) -> bool:
 	return t == Tile.FLOOR or t == Tile.DOOR_OPEN
 
 
+## Creatures and light pass through these.
+func is_transparent(p: Vector2i) -> bool:
+	var t := get_tile(p)
+	return t == Tile.FLOOR or t == Tile.DOOR_OPEN
+
+
+## The room whose floor contains p, or -1 (corridors, walls, doors). O(1).
 func room_at(p: Vector2i) -> int:
-	for room in rooms:
-		var rect: Rect2i = room["rect"]
-		if rect.has_point(p):
-			return int(room["id"])
-	return -1
+	return int(_room_of.get(p, -1))
+
+
+## True when nothing opaque lies strictly between a and b. Symmetric: a sees b
+## exactly when b sees a (a line is traced both ways and either clear line counts).
+func has_line_of_sight(a: Vector2i, b: Vector2i) -> bool:
+	return _ray_clear(a, b) or _ray_clear(b, a)
+
+
+func _ray_clear(a: Vector2i, b: Vector2i) -> bool:
+	# Bresenham's line; the end points themselves may be opaque (a creature in a doorway).
+	var dx := absi(b.x - a.x)
+	var dy := -absi(b.y - a.y)
+	var sx := 1 if a.x < b.x else -1
+	var sy := 1 if a.y < b.y else -1
+	var err := dx + dy
+	var p := a
+	while true:
+		if p != a and p != b and not is_transparent(p):
+			return false
+		if p == b:
+			return true
+		var e2 := 2 * err
+		if e2 >= dy:
+			err += dy
+			p.x += sx
+		if e2 <= dx:
+			err += dx
+			p.y += sy
+	return true
 
 
 func room_floor_tiles(room: Dictionary) -> Array:
@@ -71,7 +102,8 @@ func unexplored_door_count() -> int:
 
 func create_start_room() -> Dictionary:
 	var rng := rng_for("start")
-	var room := _carve_room(Rect2i(-3, -3, 7, 6), 0, "entrance hall")
+	var rules := GameData.dungeon
+	var room := _carve_room(rules.start_rect, 0, rules.start_kind)
 	for d in DIRS:
 		_add_door_on_wall(room, d, rng)
 	return room
@@ -86,14 +118,15 @@ func open_door(p: Vector2i) -> Dictionary:
 	var d: Vector2i = info["dir"]
 	var parent: Dictionary = rooms[int(info["room"])]
 	var rng := rng_for("door:%d,%d" % [p.x, p.y])
-	for attempt in MAX_ATTEMPTS:
-		var length := rng.randi_range(1, 4)
-		var along := rng.randi_range(4, 9)
-		var across := rng.randi_range(4, 8)
-		if attempt >= SHRINK_AFTER:
-			length = 1
-			along = rng.randi_range(3, 4)
-			across = rng.randi_range(3, 4)
+	var rules := GameData.dungeon
+	for attempt in rules.max_attempts:
+		var length := rng.randi_range(rules.corridor_length.x, rules.corridor_length.y)
+		var along := rng.randi_range(rules.room_depth.x, rules.room_depth.y)
+		var across := rng.randi_range(rules.room_width.x, rules.room_width.y)
+		if attempt >= rules.shrink_after:
+			length = rules.corridor_length.x
+			along = rng.randi_range(rules.small_room.x, rules.small_room.y)
+			across = rng.randi_range(rules.small_room.x, rules.small_room.y)
 		var offset := rng.randi_range(0, across - 1)
 		var plan := _plan(p, d, length, along, across, offset)
 		if _fits(plan):
@@ -106,6 +139,24 @@ func open_door(p: Vector2i) -> Dictionary:
 	return {}
 
 
+## SHA-256 of every tile, in a fixed order: two maps with the same hash are identical.
+func map_hash() -> String:
+	var keys: Array = tiles.keys()
+	keys.sort()
+	var buf := PackedInt32Array()
+	buf.resize(keys.size() * 3)
+	var i := 0
+	for p in keys:
+		buf[i] = p.x
+		buf[i + 1] = p.y
+		buf[i + 2] = int(tiles[p])
+		i += 3
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(buf.to_byte_array())
+	return ctx.finish().hex_encode()
+
+
 func to_dict() -> Dictionary:
 	return {"seed": world_seed, "tiles": tiles, "revealed": revealed, "rooms": rooms, "doors": doors}
 
@@ -116,6 +167,16 @@ func from_dict(data: Dictionary) -> void:
 	revealed = data.get("revealed", {})
 	rooms = data.get("rooms", [])
 	doors = data.get("doors", {})
+	_room_of.clear()
+	for room in rooms:
+		_index_room(room)
+
+
+func _index_room(room: Dictionary) -> void:
+	var rect: Rect2i = room["rect"]
+	for x in range(rect.position.x, rect.end.x):
+		for y in range(rect.position.y, rect.end.y):
+			_room_of[Vector2i(x, y)] = int(room["id"])
 
 
 # --- internals -------------------------------------------------------------
@@ -134,6 +195,7 @@ func _carve_room(rect: Rect2i, depth: int, kind: String) -> Dictionary:
 				tiles[p] = Tile.WALL
 			revealed[p] = true
 	rooms.append(room)
+	_index_room(room)
 	return room
 
 
@@ -198,12 +260,13 @@ func _build(p: Vector2i, d: Vector2i, plan: Dictionary, parent: Dictionary, rng:
 	tiles[p] = Tile.DOOR_OPEN
 	doors.erase(p)
 	var depth: int = int(parent["depth"]) + 1
-	var kind: String = ROOM_KINDS[rng.randi() % ROOM_KINDS.size()]
+	var rules := GameData.dungeon
+	var kind: String = rules.room_kinds[rng.randi() % rules.room_kinds.size()]
 	var room := _carve_room(plan["rect"], depth, kind)
 	var entry: Vector2i = plan["entry"]
 	tiles[entry] = Tile.DOOR_OPEN
 	room["entry"] = entry
-	var exit_chance := 0.6 if depth < 6 else 0.4
+	var exit_chance := rules.exit_chance if depth < rules.deep_after else rules.exit_chance_deep
 	for nd in DIRS:
 		if nd == -d:
 			continue

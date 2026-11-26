@@ -8,6 +8,21 @@ const PATH := "user://settings.cfg"
 
 const DEFAULTS := {
 	"player": {"name": "Adventurer"},
+	"controls": {
+		"move_repeat_delay": 0.22,      # seconds before a held move repeats
+		"move_repeat_interval": 0.11,   # seconds between repeats while held
+	},
+	"audio": {                          # volumes, 0.0 to 1.0
+		"master": 1.0,
+		"music": 0.8,
+		"sfx": 1.0,
+		"ambience": 0.7,
+	},
+	"ui": {
+		"scale": 1.0,                   # text and HUD size, 0.75 to 2.0 (e.g. 1.25 on a Steam Deck)
+	},
+	# [input] holds optional per-action overrides, e.g. end_turn="key:Enter, joy_button:a"
+	# (defaults: data/input/bindings.json, formats: docs/INPUT.md)
 	"gm": {
 		"provider": "offline",            # offline | local | claude
 		"claude_model": "claude-opus-5-5",
@@ -27,6 +42,10 @@ static func load_config() -> ConfigFile:
 			if not cfg.has_section_key(section, key):
 				cfg.set_value(section, key, DEFAULTS[section][key])
 	return cfg
+
+
+static func ui_scale(cfg: ConfigFile) -> float:
+	return clampf(float(cfg.get_value("ui", "scale", 1.0)), 0.75, 2.0)
 
 
 static func save_config(cfg: ConfigFile) -> void:

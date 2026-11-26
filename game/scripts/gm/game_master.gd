@@ -31,7 +31,7 @@ func setup(p: GMProvider) -> void:
 
 func build_schema() -> Dictionary:
 	var monster_keys: Array = [""]
-	monster_keys.append_array(GameState.monster_table.keys())
+	monster_keys.append_array(GameData.monsters.keys())
 	var ability_keys: Array = [""]
 	ability_keys.append_array(Rules.ABILITIES)
 	return {

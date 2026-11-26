@@ -10,6 +10,10 @@ var gm: GameMaster
 var map_view: Node2D
 var in_game := false
 var controlled_id := ""
+var repeater: MoveRepeater
+var audio: AudioDirector
+var debug: DebugTools   # debug builds only
+var ui_scale := 1.0
 
 # menu widgets
 var menu: Control
@@ -20,31 +24,55 @@ var provider_option: OptionButton
 var ip_edit: LineEdit
 var lan_list: ItemList
 var menu_status: Label
+var continue_button: Button
 
 # HUD widgets
 var hud: Control
 var status_label: Label
 var log_label: RichTextLabel
 var input_line: LineEdit
+var help_label: Label
+
+const HUD_WIDTH := 420
 
 
 func _ready() -> void:
 	cfg = Settings.load_config()
+	InputBindings.apply(cfg)
+	repeater = MoveRepeater.new(float(cfg.get_value("controls", "move_repeat_delay")), float(cfg.get_value("controls", "move_repeat_interval")))
+	ui_scale = Settings.ui_scale(cfg)
 	map_view = MapViewScript.new()
 	map_view.visible = false
 	add_child(map_view)
+	audio = AudioDirector.new()
+	add_child(audio)
+	audio.apply_volumes(cfg)
+	map_view.presenter.played.connect(audio.on_played)
+	GameState.log_added.connect(audio.on_log)
 	var ui := CanvasLayer.new()
 	add_child(ui)
 	_build_menu(ui)
 	_build_hud(ui)
+	_apply_ui_scale()
 	GameState.log_added.connect(_on_log)
 	GameState.changed.connect(_on_state_changed)
 	Net.status.connect(func(t): menu_status.text = t)
 	Net.lan_game_found.connect(_on_lan_found)
 	Net.joined.connect(_show_game)
 	Net.start_discovery()
-	if "--smoke" in OS.get_cmdline_user_args():
+	if OS.is_debug_build():
+		debug = DebugTools.new()
+		debug.map_view = map_view
+		debug.acting_id = _acting_id
+		add_child(debug)
+	var args := OS.get_cmdline_user_args()
+	if "--play" in args:
+		_quick_play.call_deferred(args)
+	if "--smoke" in args:
 		_run_smoke.call_deferred()
+	for a in args:
+		if a.begins_with("--replay="):
+			_run_replay.call_deferred(a.trim_prefix("--replay="), "--watch" in args)
 
 
 # --- menu ------------------------------------------------------------------------
@@ -54,13 +82,13 @@ func _build_menu(ui: CanvasLayer) -> void:
 	menu.set_anchors_preset(Control.PRESET_FULL_RECT)
 	ui.add_child(menu)
 	var box := VBoxContainer.new()
-	box.custom_minimum_size = Vector2(460, 0)
+	box.custom_minimum_size = Vector2(460 * ui_scale, 0)
 	box.add_theme_constant_override("separation", 8)
 	menu.add_child(box)
 
 	var title := Label.new()
 	title.text = "EMBERDEEP"
-	title.add_theme_font_size_override("font_size", 40)
+	title.add_theme_font_size_override("font_size", roundi(40 * ui_scale))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(title)
 
@@ -77,6 +105,11 @@ func _build_menu(ui: CanvasLayer) -> void:
 	provider_option.add_item("Claude API (needs ANTHROPIC_API_KEY)")
 	provider_option.select(maxi(0, PROVIDERS.find(str(cfg.get_value("gm", "provider")))))
 
+	continue_button = Button.new()
+	continue_button.text = "Continue (quick save)"
+	continue_button.pressed.connect(_continue)
+	continue_button.visible = SaveGame.exists(SaveGame.QUICK)
+	box.add_child(continue_button)
 	_button(box, "Play on this computer", _start_local)
 	_button(box, "Host a LAN game", _host_lan)
 	box.add_child(HSeparator.new())
@@ -124,6 +157,29 @@ func _start_local() -> void:
 	_start_gm()
 	GameState.new_game(seed_edit.text.to_int(), names, 1)
 	_show_game()
+
+
+func _continue() -> void:
+	_save_menu_choices()
+	_start_gm()
+	if _load_quicksave():
+		_show_game()
+
+
+## Loads the quick save into a local game. Returns false (and says why) on failure.
+func _load_quicksave() -> bool:
+	var r := SaveGame.load_slot(SaveGame.QUICK)
+	if r["error"] != "":
+		if in_game:
+			GameState.add_log("system", "Could not load: " + str(r["error"]))
+		else:
+			menu_status.text = "Could not load the quick save: " + str(r["error"])
+		return false
+	if gm:
+		gm.history = r["extra"].get("gm_history", [])
+	_show_game()
+	GameState.add_log("system", "Loaded.")
+	return true
 
 
 func _host_lan() -> void:
@@ -188,7 +244,7 @@ func _build_hud(ui: CanvasLayer) -> void:
 	hud.anchor_left = 1.0
 	hud.anchor_right = 1.0
 	hud.anchor_bottom = 1.0
-	hud.offset_left = -420
+	hud.offset_left = -HUD_WIDTH
 	hud.visible = false
 	ui.add_child(hud)
 	var box := VBoxContainer.new()
@@ -205,10 +261,23 @@ func _build_hud(ui: CanvasLayer) -> void:
 	input_line.placeholder_text = "Enter: tell the GM what you do or say"
 	input_line.text_submitted.connect(_on_say)
 	box.add_child(input_line)
-	var help := Label.new()
-	help.text = "Move: arrows/WASD  Attack: walk into a foe\nSpace: end turn  Tab: switch hero  Esc: leave text box"
-	help.add_theme_font_size_override("font_size", 12)
-	box.add_child(help)
+	help_label = Label.new()
+	help_label.text = InputBindings.help_text()
+	help_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(help_label)
+
+
+## One theme for every menu and HUD control: text size and panel width follow the
+## player's ui scale. The map is not scaled (it has its own camera).
+func _apply_ui_scale() -> void:
+	var theme := Theme.new()
+	theme.default_font_size = roundi(16 * ui_scale)
+	menu.theme = theme
+	hud.theme = theme
+	help_label.add_theme_font_size_override("font_size", roundi(12 * ui_scale))
+	var width := roundi(HUD_WIDTH * ui_scale)
+	hud.offset_left = -width
+	map_view.hud_width = width
 
 
 func _show_game() -> void:
@@ -225,35 +294,59 @@ func _show_game() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	var k := event as InputEventKey
-	if not in_game or k == null or not k.pressed:
+	if not in_game:
 		return
-	var key: int = k.keycode
 	if input_line.has_focus():
-		if key == KEY_ESCAPE:
+		if event.is_action_pressed("cancel"):
 			input_line.release_focus()
+			get_viewport().set_input_as_handled()
 		return
-	var dir := Vector2i.ZERO
-	match key:
-		KEY_UP, KEY_W: dir = Vector2i.UP
-		KEY_DOWN, KEY_S: dir = Vector2i.DOWN
-		KEY_LEFT, KEY_A: dir = Vector2i.LEFT
-		KEY_RIGHT, KEY_D: dir = Vector2i.RIGHT
-	if dir != Vector2i.ZERO:
-		Net.send_intent({"type": "move", "dir": dir, "actor": _acting_id()})
-	elif k.echo:
-		return
-	elif key == KEY_SPACE:
+	for action in InputBindings.MOVES:
+		if event.is_action_released(action):
+			repeater.release(InputBindings.MOVES[action])
+		elif event.is_action_pressed(action):
+			# moves fire on the press itself (no waiting for the next frame); holding
+			# repeats on the game's clock in _process
+			_send_move(repeater.press(InputBindings.MOVES[action]))
+			get_viewport().set_input_as_handled()
+			return
+	if event.is_action_pressed("end_turn"):
 		Net.send_intent({"type": "end_turn", "actor": _acting_id()})
-	elif key == KEY_TAB:
+	elif event.is_action_pressed("switch_hero"):
 		_cycle_hero()
-	elif key == KEY_ENTER or key == KEY_KP_ENTER:
-		input_line.grab_focus()
-	elif key == KEY_R and GameState.game_over and not Net.is_online():
+	elif event.is_action_pressed("talk"):
+		input_line.grab_focus.call_deferred()   # deferred: the same key must not also submit the box
+	elif event.is_action_pressed("restart") and GameState.game_over and not Net.is_online():
 		_start_local()
+	elif event.is_action_pressed("quick_save") and Net.is_authority():
+		var err := SaveGame.write(SaveGame.QUICK, {"gm_history": gm.history if gm else []})
+		GameState.add_log("system", "Saved." if err.is_empty() else "Could not save: " + err)
+	elif event.is_action_pressed("quick_load") and not Net.is_online():
+		_load_quicksave()
+	elif event.is_action_pressed("save_replay") and Net.is_authority():
+		var path := Replay.save()
+		GameState.add_log("system", "Replay saved to %s" % ProjectSettings.globalize_path(path) if path != "" else "Nothing to save as a replay.")
 	else:
 		return
 	get_viewport().set_input_as_handled()
+
+
+func _process(delta: float) -> void:
+	if not in_game or input_line.has_focus():
+		return
+	var held := repeater.held()
+	if held == Vector2i.ZERO:
+		return
+	var action := ""
+	for a in InputBindings.MOVES:
+		if InputBindings.MOVES[a] == held:
+			action = a
+	_send_move(repeater.tick(delta, Input.is_action_pressed(action)))
+
+
+func _send_move(dir: Vector2i) -> void:
+	if dir != Vector2i.ZERO:
+		Net.send_intent({"type": "move", "dir": dir, "actor": _acting_id()})
 
 
 ## In combat, hot-seat players automatically control whoever's turn it is.
@@ -281,6 +374,8 @@ func _cycle_hero() -> void:
 func _on_say(text: String) -> void:
 	input_line.clear()
 	input_line.release_focus()
+	if debug and debug.run(text.strip_edges()):
+		return
 	if not text.strip_edges().is_empty():
 		Net.send_intent({"type": "say", "text": text, "actor": _acting_id()})
 
@@ -289,12 +384,14 @@ func _on_state_changed() -> void:
 	if not in_game:
 		return
 	map_view.focus_id = _acting_id()
-	map_view.queue_redraw()
+	audio.focus_id = map_view.focus_id
+	map_view.refresh()
 	var lines: Array = []
 	for id in GameState.player_order:
 		var h: Dictionary = GameState.players[id]
 		var marker := ">" if id == _acting_id() else " "
-		lines.append("%s %s  HP %d/%d  AC %d" % [marker, h["name"], h["hp"], h["max_hp"], h["ac"]])
+		var cond := GameState.hero_condition(h)
+		lines.append("%s %s  HP %d/%d  AC %d%s" % [marker, h["name"], h["hp"], h["max_hp"], h["ac"], "" if cond == "ok" else "  (" + cond + ")"])
 	var header := "Exploring" if GameState.mode == "explore" else "COMBAT, round %d" % GameState.round_num
 	var cur := GameState.current_actor()
 	if GameState.players.has(cur):
@@ -313,6 +410,43 @@ func _on_log(entry: Dictionary) -> void:
 		_: log_label.append_text("[color=#a9a3b3]%s[/color]\n" % text)
 
 
+## `-- --play [--seed=N] [--heroes=N]`: skip the menu, straight into a local game.
+func _quick_play(args: PackedStringArray) -> void:
+	for a in args:
+		if a.begins_with("--seed="):
+			seed_edit.text = a.trim_prefix("--seed=")
+		elif a.begins_with("--heroes="):
+			heroes_spin.value = clampi(a.trim_prefix("--heroes=").to_int(), 1, 4)
+	_start_local()
+
+
+# --- replays ----------------------------------------------------------------------
+
+## `-- --replay=<file>`: re-runs a recorded game and checks it reproduces (exit 0/1).
+## With `--watch`, plays it in the window at reading speed instead.
+func _run_replay(path: String, watch: bool) -> void:
+	var rec := Replay.read(path)
+	if rec.is_empty():
+		print("REPLAY error=could not read %s" % path)
+		get_tree().quit(2)
+		return
+	if not watch:
+		var r := Replay.run(rec)
+		print("REPLAY error=%s inputs=%d matches=%s data_changed=%s hash=%s" % [r["error"], r["inputs"], r["matches"], r["data_changed"], r["hash"]])
+		get_tree().quit(0 if r["error"] == "" and r["matches"] else 1)
+		return
+	var err := Replay.begin(rec)
+	if err != "":
+		print("REPLAY error=%s" % err)
+		get_tree().quit(2)
+		return
+	_show_game()
+	for op in rec["inputs"]:
+		Replay.step(op)
+		await get_tree().create_timer(0.12).timeout
+	print("REPLAY watched inputs=%d matches=%s" % [rec["inputs"].size(), GameState.state_hash() == str(rec.get("final_hash", ""))])
+
+
 # --- dev smoke run -----------------------------------------------------------------
 
 ## `emberdeep.x86_64 -- --smoke [--shot=/path/to.png] [--steps=N]`
@@ -322,8 +456,11 @@ func _on_log(entry: Dictionary) -> void:
 func _run_smoke() -> void:
 	var shot := "user://smoke.png"
 	var steps := 400
+	var record := ""
 	for a in OS.get_cmdline_user_args():
-		if a.begins_with("--shot="):
+		if a.begins_with("--record="):
+			record = a.trim_prefix("--record=")
+		elif a.begins_with("--shot="):
 			shot = a.trim_prefix("--shot=")
 		elif a.begins_with("--steps="):
 			steps = a.trim_prefix("--steps=").to_int()
@@ -341,6 +478,8 @@ func _run_smoke() -> void:
 		await get_tree().process_frame
 	await get_tree().create_timer(0.5).timeout
 	get_viewport().get_texture().get_image().save_png(shot)
+	if record != "":
+		print("SMOKE replay=%s" % Replay.save(record))
 	var hp: Array = []
 	for id in GameState.player_order:
 		hp.append("%s %d/%d" % [GameState.players[id]["name"], GameState.players[id]["hp"], GameState.players[id]["max_hp"]])
@@ -351,14 +490,12 @@ func _run_smoke() -> void:
 
 
 func _smoke_press(key: Key) -> void:
-	var down := InputEventKey.new()
-	down.keycode = key
-	down.pressed = true
-	Input.parse_input_event(down)
-	var up := InputEventKey.new()
-	up.keycode = key
-	up.pressed = false
-	Input.parse_input_event(up)
+	for pressed in [true, false]:
+		var ev := InputEventKey.new()   # like a real keyboard: logical and physical code
+		ev.keycode = key
+		ev.physical_keycode = key
+		ev.pressed = pressed
+		Input.parse_input_event(ev)
 
 
 ## First step of a shortest path to a goal (a foe to hit in combat, else an unexplored

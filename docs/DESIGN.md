@@ -28,9 +28,23 @@ explore (free movement) -> open a door -> engine builds the room + rolls content
 
 - **Exploration mode:** each hero moves freely. Typing in the box sends "what I say or do"
   to the GM. Stepping on a gold door opens it.
-- **Combat mode:** starts when awake monsters are present. Initiative = d20 + DEX modifier.
-  On your turn: move up to 6 squares (30 ft) and make one attack (walk into the foe). Space ends
-  the turn. Monsters move and attack on theirs.
+- **Who notices whom:** creatures placed in a room start asleep. One wakes when a conscious
+  hero is in its room, or within 8 squares (40 ft) with line of sight, or when it is attacked.
+  Creatures the GM adds (an alarm) arrive awake. Only awake creatures fight, so a fight is
+  local: the rest of the dungeon stays where it is.
+- **Combat mode:** starts when a creature wakes. Initiative = d20 + DEX modifier; ties go to the
+  higher Dexterity score, then heroes before monsters. A creature that wakes mid-fight joins at
+  its place in the order. On your turn: move up to 6 squares (30 ft) and take one action: attack
+  (walk into a foe) or tend a dying ally (walk into them). Space ends the turn.
+- **Monsters** chase the nearest hero they can reach, along a real path (A*). A creature that
+  has had no route to the party for 2 of its turns loses track, goes back to sleep and leaves
+  the fight. The fight ends when no creature is awake.
+- **Dropping to 0 HP:** the hero is dying. At the start of each of their turns they roll a death
+  saving throw (d20: 10+ success, natural 1 = two failures, natural 20 = back up with 1 HP).
+  Three successes: stable. Three failures: dead. An ally can walk into a dying hero to stabilize
+  them with a DC 10 Wisdom (Medicine) check (their action in combat; retry freely outside it).
+  *Simplification until rests exist:* a stable hero comes to with 1 HP once no fight is going on
+  (the rules say 1d4 hours). The delve ends when no hero is conscious.
 - **Depth:** each room's depth is its distance in doors from the entrance. Encounter budget grows
   with depth (see `_populate_room` in `game_state.gd`).
 
@@ -38,11 +52,12 @@ explore (free movement) -> open a door -> engine builds the room + rolls content
 
 Skeleton today: ability scores and modifiers, proficiency bonus, d20 tests, ability checks
 with DCs, attack rolls (natural 20 crits, natural 1 misses), damage dice with crits doubling the
-dice, AC, HP, initiative, speed in 5-ft squares. One pregenerated level-1 Fighter.
+dice, AC, HP, initiative (Dexterity breaks ties), speed in 5-ft squares, death saving throws,
+stabilizing (Wisdom (Medicine) DC 10). One pregenerated level-1 Fighter.
 
 Next, in order (see [ROADMAP.md](ROADMAP.md)): character creation (species, background,
 classes: Fighter, Rogue, Cleric, Wizard first), skills and proficiency, advantage/disadvantage
-from conditions, death saving throws, short/long rests, opportunity attacks, ranged attacks
+from conditions, healing potions, short/long rests, opportunity attacks, ranged attacks
 and cover, spells (a curated SRD subset), conditions, XP and levels 1-5, equipment and
 potions, stealth and surprise.
 

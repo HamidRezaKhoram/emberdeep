@@ -1,0 +1,14 @@
+{
+  "_note": "Performance budgets checked by scripts/bench.sh (game/tests/bench.gd) on a dungeon grown to `rooms` rooms. Times are milliseconds, measured on a 2020-era laptop and set about 10x above that, so slow CI machines pass and real regressions (an O(n) scan creeping into a hot path) fail. Tighten as the game matures; see docs/PERFORMANCE.md.",
+  "rooms": 300,
+  "monsters": 300,
+  "open_door_ms": 2.0,
+  "room_at_ms": 0.01,
+  "monster_at_ms": 0.01,
+  "awareness_ms": 1.0,
+  "fight_round_ms": 10.0,
+  "hero_step_ms": 2.0,
+  "save_write_ms": 400.0,
+  "save_load_ms": 800.0,
+  "snapshot_kb_no_map": 200.0
+}

@@ -7,10 +7,13 @@ host-authoritative multiplayer (hot-seat, LAN, later Steam). Read `docs/ARCHITEC
 
 - `scripts/fetch-godot.sh`: pinned Godot into `.tools/` (add `--templates` to export)
 - `scripts/run-tests.sh`: headless tests; run before and after every change, must pass
+- `scripts/bench.sh`: performance budgets on a 300-room dungeon (`docs/PERFORMANCE.md`); must pass
 - `scripts/export-linux.sh`: builds `build/linux/emberdeep.x86_64`
 - `.tools/godot --path game`: run the game
 - `scripts/smoke.sh`: a bot plays a seeded 2-hero game through real key events in a window,
   saves `build/smoke.png` and prints a summary; use it to check UI/gameplay changes for real
+- `.tools/godot --path game -- --play --seed=42 --overlay`: straight into a game with the debug overlay
+  (debug tools and flags: `docs/DEBUG.md`; saves and replays: `docs/SAVES.md`)
 
 ## Rules of the codebase
 
@@ -25,3 +28,10 @@ host-authoritative multiplayer (hot-seat, LAN, later Steam). Read `docs/ARCHITEC
 - New intents must check that the sender owns the hero.
 - Keep docs in step with code: if behavior in a doc changes, update the doc in the same commit.
 - Static typing in GDScript where the type is known (`var x: int`, `-> Dictionary`).
+- **Every change to game state goes through an input** (`handle_intent`, `apply_gm_response`,
+  `add_player`, `remove_players_of`) so it is recorded and replays reproduce. Debug commands too.
+- **Emit an event** (`_emit`) wherever state changes something the player sees (`docs/EVENTS.md`).
+- **Never set `monster["pos"]` directly**: use `move_monster()`; indexes must stay in step.
+- **Balance numbers live in `game/data/`** (`docs/DATA.md`), never as constants in code.
+- **Changing dungeon generation?** Bump `generator_version` in `data/rules/dungeon.json`.
+  **Changing the save layout?** Bump `SaveGame.FORMAT` and add a migration (`docs/SAVES.md`).

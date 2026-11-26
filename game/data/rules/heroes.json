@@ -1,0 +1,16 @@
+{
+  "_note": "Pregenerated level-1 characters. Class features and numbers follow SRD 5.2.1 (CC-BY-4.0, see docs/LEGAL.md).",
+  "default_class": "fighter",
+  "classes": {
+    "fighter": {
+      "name": "Fighter",
+      "level": 1,
+      "abilities": {"str": 15, "dex": 14, "con": 13, "int": 10, "wis": 12, "cha": 8},
+      "hp": 11,
+      "ac": 16,
+      "attack_bonus": 4,
+      "damage": "1d8+2",
+      "weapon": "longsword"
+    }
+  }
+}
