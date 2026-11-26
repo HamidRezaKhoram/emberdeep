@@ -731,6 +731,8 @@ func _find_chase(m: Dictionary) -> Dictionary:
 		var goal: Vector2i = players[hid]["pos"]
 		if _manhattan(from, goal) == 1:
 			return {"target": hid, "path": [goal]}
+		if _manhattan(from, goal) > GameData.balance.chase_range:
+			break   # sorted nearest first: everyone else is farther still
 		var path := Pathfinder.find_path(from, goal, _monster_can_enter, GameData.balance.path_budget)
 		if not path.is_empty():
 			return {"target": hid, "path": path}

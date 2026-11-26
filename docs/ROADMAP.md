@@ -13,6 +13,27 @@ Each milestone ends with something playable. Tick items as they land.
 - [x] Headless tests: dice, rules, generator determinism and layout, ownership, GM validation, combat ends, snapshots
 - [x] First run on a real machine (Fedora, Intel UHD 630): tests pass, debug build runs, smoke bot plays a delve
 
+## How we scope
+
+- **Every milestone ends playable.** If it isn't fun with squares, art won't fix it: playtest the
+  smoke bot's seeds and your own games before calling a milestone done.
+- **Done means:** tests and performance budgets pass, the smoke bot plays, docs match the code,
+  and a replay from the previous milestone still verifies (or the change in behavior is intended
+  and noted).
+- **Cut, don't half-build.** A feature that slips moves to a later milestone whole. Nothing
+  half-wired ships behind a flag.
+- **Not now:** procedural quests, crafting, character customization beyond the four SRD classes,
+  multiple levels loaded at once, a mobile build. Revisit after M3.
+
+## Engineering foundations (done before M1 content)
+
+- [x] Data-driven, validated rules and balance ([DATA.md](DATA.md))
+- [x] Rebindable input, controller, UI scale ([INPUT.md](INPUT.md))
+- [x] Event stream and animated presentation, audio hook ([EVENTS.md](EVENTS.md))
+- [x] Versioned saves, replay files ([SAVES.md](SAVES.md))
+- [x] Debug tools, quick launch ([DEBUG.md](DEBUG.md))
+- [x] Performance budgets in CI ([PERFORMANCE.md](PERFORMANCE.md))
+
 ## M1: A real session (vertical slice)
 
 - [ ] Character creation: 4 SRD classes (Fighter, Rogue, Cleric, Wizard), species, background, standard array

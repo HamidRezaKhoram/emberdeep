@@ -4,6 +4,7 @@
   "sight_tiles": 8,
   "lose_track_turns": 2,
   "path_budget": 512,
+  "chase_range": 30,
   "stabilize_dc": 10,
   "max_log": 200,
   "gm": {

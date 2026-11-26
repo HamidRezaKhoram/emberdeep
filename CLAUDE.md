@@ -7,6 +7,7 @@ host-authoritative multiplayer (hot-seat, LAN, later Steam). Read `docs/ARCHITEC
 
 - `scripts/fetch-godot.sh`: pinned Godot into `.tools/` (add `--templates` to export)
 - `scripts/run-tests.sh`: headless tests; run before and after every change, must pass
+- `scripts/bench.sh`: performance budgets on a 300-room dungeon (`docs/PERFORMANCE.md`); must pass
 - `scripts/export-linux.sh`: builds `build/linux/emberdeep.x86_64`
 - `.tools/godot --path game`: run the game
 - `scripts/smoke.sh`: a bot plays a seeded 2-hero game through real key events in a window,

@@ -104,6 +104,7 @@ class Balance:
 	var sight_tiles: int
 	var lose_track_turns: int
 	var path_budget: int
+	var chase_range: int     # beyond this grid distance a creature doesn't even search for a path
 	var stabilize_dc: int
 	var max_log: int
 	var gm_max_spawns_per_room: int
@@ -123,6 +124,7 @@ class Balance:
 		sight_tiles = r.int_("sight_tiles", 8, 1, 40)
 		lose_track_turns = r.int_("lose_track_turns", 2, 1, 20)
 		path_budget = r.int_("path_budget", 512, 16, 100000)
+		chase_range = r.int_("chase_range", 30, 2, 1000)
 		stabilize_dc = r.int_("stabilize_dc", 10, 1, 30)
 		max_log = r.int_("max_log", 200, 10, 10000)
 		var gm := r.child("gm")

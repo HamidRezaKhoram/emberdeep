@@ -6,7 +6,7 @@ To tune the game, edit a file; no code changes needed.
 
 | File | What | Notes |
 |---|---|---|
-| `data/rules/balance.json` | speed, sight range, how fast creatures lose track, GM limits, encounter and item odds, CR budget by depth | safe to tune freely |
+| `data/rules/balance.json` | speed, sight range, how fast creatures lose track, chase range, GM limits, encounter and item odds, CR budget by depth | safe to tune freely |
 | `data/rules/dungeon.json` | room and corridor sizes, exit odds, room kinds, start room | **changes the map a seed makes**: bump `generator_version` |
 | `data/rules/heroes.json` | character classes (one Fighter for now) | SRD 5.2.1 derived |
 | `data/rules/items.json` | flavor item names | |
